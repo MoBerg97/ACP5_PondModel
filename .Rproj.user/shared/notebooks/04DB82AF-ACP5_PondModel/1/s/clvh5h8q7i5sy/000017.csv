@@ -1,0 +1,10 @@
+"0","# Example run
+# 1. Export settings - creates directories with all model setups and exports settings from the LER configuration file
+export_config(config_file = config_file, model = model)
+"
+"2","Warnung: Tabs detected in Data/LakeEnsemblR.yaml. This could lead to errors, replace with spaces."
+"2","export_dirs complete!
+"
+"2","Fehler in get_meteo_time_step(file.path(folder, get_yaml_value(config_file,  : 
+  Meteo file has irregular time steps!
+"

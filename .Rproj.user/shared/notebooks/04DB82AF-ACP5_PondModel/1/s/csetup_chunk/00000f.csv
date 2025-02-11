@@ -1,0 +1,142 @@
+"0","knitr::opts_chunk$set(echo = TRUE)"
+"0","# remotes::install_github(""GLEON/rLakeAnalyzer"")"
+"0","# remotes::install_github(""aemon-j/GLM3r"", ref = ""v3.1.1"")"
+"0","# remotes::install_github(""USGS-R/glmtools"", ref = ""ggplot_overhaul"")"
+"0","# remotes::install_github(""aemon-j/FLakeR"", ref = ""inflow"")"
+"0","# remotes::install_github(""aemon-j/GOTMr"")"
+"0","# remotes::install_github(""aemon-j/gotmtools"")"
+"0","# remotes::install_github(""aemon-j/SimstratR"")"
+"0","# remotes::install_github(""aemon-j/MyLakeR"")"
+"0","# remotes::install_github(""aemon-j/LakeEnsemblR"")"
+"0","library(rLakeAnalyzer)"
+"0","library(GLM3r)"
+"2","
+DISCLAIMER AND COPYRIGHT NOTICE
+By downloading the software you agree to the following terms:
+
+The University of Western Australia has developed the code with reasonable care and 
+skill, however, the authors do not make or imply any warranty as to the quality of 
+simulated output from the software supplied. Nor do the authors accept any 
+responsibility for the use of the model including any advice or information 
+which the user may give, or opinions which they express, arising from model 
+simulated output.
+
+This information is preliminary or provisional and is subject to revision. It
+is being provided to meet the need for timely best science.
+"
+"0","library(glmtools)"
+"2","Warnung: vorhergehender Import ‘adagio::count’ durch ‘dplyr::count’ während des Ladens von ‘glmtools’ ersetzt"
+"2","
+This information is preliminary or provisional and is subject to revision. It
+is being provided to meet the need for timely best science. The information has
+not received final approval by the U.S. Geological Survey (USGS) and is
+provided on the condition that neither the USGS nor the U.S. Government shall
+be held liable for any damages resulting from the authorized or unauthorized
+use of the information. Although this software program has been used by the
+USGS, no warranty, expressed or implied, is made by the USGS or the U.S.
+Government as to the accuracy and functioning of the program and related
+program material nor shall the fact of distribution constitute any such
+warranty, and no responsibility is assumed by the USGS in connection therewith
+.
+"
+"2","
+Attache Paket: ‘glmtools’
+
+"
+"2","Die folgenden Objekte sind maskiert von ‘package:rLakeAnalyzer’:
+
+    epi.temperature, hypo.temperature, whole.lake.temperature
+
+"
+"0","library(FLakeR)"
+"0","library(GOTMr)"
+"0","library(gotmtools)"
+"2","Warnung: vorhergehender Import ‘stats::filter’ durch ‘dplyr::filter’ während des Ladens von ‘gotmtools’ ersetzt"
+"2","
+Attache Paket: ‘gotmtools’
+
+"
+"2","Das folgende Objekt ist maskiert ‘package:glmtools’:
+
+    plot_meteo
+
+"
+"0","library(SimstratR)"
+"0","library(MyLakeR)"
+"0","library(LakeEnsemblR)"
+"1",""
+"1","
+"
+"1",""
+"1","
+"
+"1","  _          _        _____                          _     _ ____  "
+"1","
+"
+"1"," | |    __ _| | _____| ____|_ __  ___  ___ _ __ ___ | |__ | |  _ \ "
+"1","
+"
+"1"," | |   / _` | |/ / _ |  _| | '_ \/ __|/ _ | '_ ` _ \| '_ \| | |_) |"
+"1","
+"
+"1"," | |__| (_| |   |  __| |___| | | \__ |  __| | | | | | |_) | |  _ < "
+"1","
+"
+"1"," |_____\__,_|_|\_\___|_____|_| |_|___/\___|_| |_| |_|_.__/|_|_| \_\"
+"1","
+"
+"1","                                                                   "
+"1","
+"
+"1",""
+"1","
+"
+"1","              https://github.com/aemon-j/LakeEnsemblR"
+"1","
+"
+"2","LakeEnsemblR version 1.2.7 (2024-04-25) is loaded
+"
+"0","library(readr)"
+"2","Warnung: Paket ‘readr’ wurde unter R Version 4.4.2 erstellt"
+"0","library(lubridate)"
+"2","Warnung: Paket ‘lubridate’ wurde unter R Version 4.4.2 erstellt"
+"2","
+Attache Paket: ‘lubridate’
+
+"
+"2","Die folgenden Objekte sind maskiert von ‘package:base’:
+
+    date, intersect, setdiff, union
+
+"
+"0","library(tidyr)"
+"2","Warnung: Paket ‘tidyr’ wurde unter R Version 4.4.2 erstellt"
+"0","library(dplyr)"
+"2","Warnung: Paket ‘dplyr’ wurde unter R Version 4.4.2 erstellt"
+"2","
+Attache Paket: ‘dplyr’
+
+"
+"2","Die folgenden Objekte sind maskiert von ‘package:stats’:
+
+    filter, lag
+
+"
+"2","Die folgenden Objekte sind maskiert von ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+"
+"0","library(readxl)"
+"2","Warnung: Paket ‘readxl’ wurde unter R Version 4.4.2 erstellt"
+"0","library(zoo)"
+"2","Warnung: Paket ‘zoo’ wurde unter R Version 4.4.2 erstellt"
+"2","
+Attache Paket: ‘zoo’
+
+"
+"2","Die folgenden Objekte sind maskiert von ‘package:base’:
+
+    as.Date, as.Date.numeric
+
+"
