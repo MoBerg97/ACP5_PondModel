@@ -3,10 +3,13 @@ title: "ACP5-PondModel"
 author: "Moritz Berg"
 date: "`r Sys.Date()`"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, results = "hide")
+# Sys.setenv("R_REMOTES_NO_ERRORS_FROM_WARNINGS" = "true")
 # remotes::install_github("GLEON/rLakeAnalyzer")
 # remotes::install_github("aemon-j/GLM3r", ref = "v3.1.1")
 # remotes::install_github("USGS-R/glmtools", ref = "ggplot_overhaul")
@@ -31,113 +34,108 @@ library(tidyr)
 library(dplyr)
 library(readxl)
 library(zoo)
+library(data.table)
 ```
 
 # Task
 
-2.	Simulation of water temperature in scaled basins (original size of the mesocosms, x10, x100): What is the influence of basin size on water temperature and thermal stratification dynamics?
+2.  Simulation of water temperature in scaled basins (original size of the mesocosms, x10, x100): What is the influence of basin size on water temperature and thermal stratification dynamics?
 
-Note: When answering the above-mentioned research questions, the focus should be on the
-methodological aspects of the respective model applications and the necessary analyses. A detailed
-answer to the questions in the context of other scientific work goes beyond the scope of this course.
+Note: When answering the above-mentioned research questions, the focus should be on the methodological aspects of the respective model applications and the necessary analyses. A detailed answer to the questions in the context of other scientific work goes beyond the scope of this course.
 
-Portfolio: Description of methods, results and a (short) discussion. The important thing is the
-complete documentation of the conducted model simulations. 
+Portfolio: Description of methods, results and a (short) discussion. The important thing is the complete documentation of the conducted model simulations.
 
 ## Data Preparation
 
-The required format of data for the LakeEnsemblR model environment are csv tables containing the pond hypsograph, the Water Temperature Profile of the pond and the meteorological data. These files are prepared using the following code from the given datasets. LakeEnsemblR requires an input of surface level barometric pressure in Pa, therefore the transformation from hPa was undertaken. The wind direction and speed at 10m above surface should be delivered. The exact location of the anemometer was not known, hence it was assumed that the given data reflects this requirement.
-For ease of computational effort, the meteorological data is aggregated from minutely observations to hourly averages, and sum of rainfall in mm per hour respectively.
-Since a few observations across some hours were missing
+The required format of data for the LakeEnsemblR model environment are csv tables containing the pond hypsograph, the Water Temperature Profile of the pond and the meteorological data. These files are prepared using the following code from the given datasets. LakeEnsemblR requires an input of surface level barometric pressure in Pa, therefore the transformation from hPa was undertaken. The wind direction and speed at 10m above surface should be delivered. The exact location of the anemometer was not known, hence it was assumed that the given data reflects this requirement. For ease of computational effort, the meteorological data is aggregated from minutely observations to hourly averages, and sum of rainfall in mm per hour respectively. Since a few observations across some hours were missing
 
 ```{r dataprep}
 # turn wide format of EERES Temperature to long format
 EERES_Temperature = read_csv("Data/EERES_Temperature.csv")
 EERES_T_long = pivot_longer(EERES_Temperature, cols=`30 cm`:`air`, names_to = "Depth_meter", values_to = "Water_Temperature_celsius") %>%
   filter(!Depth_meter=="air") %>%
-  mutate(datetime = as_datetime(time),
+  mutate(datetime = dmy_hm(time),
          Depth_meter =  gsub("[^0-9]", "", Depth_meter)) %>%
   mutate(Depth_meter = as.numeric(Depth_meter)/100) %>%
-  select(-time)
+  select(-time) %>%
+  select(datetime, Depth_meter, Water_Temperature_celsius) %>%
+filter(!is.na(Water_Temperature_celsius))
+
+EERES_T_dropNAcol = EERES_T_long %>%
+  filter(Depth_meter!=0.15)
 
 # write Water temperature to csv
-write.csv(EERES_T_long,"Data/LakeEnsemblR_wtemp_profile_EERES.csv",row.names=FALSE)
+# write.csv(EERES_T_long,"LakeEnsemblR_wtemp_profile_EERES.csv",row.names=FALSE)
+write.table(EERES_T_dropNAcol, file = "LakeEnsemblR_wtemp_profile_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
 
-# select and transform Meteorological data
+# Meteorological data
 meteo_raw = read_xlsx("Data/20200101-20211231_Wetterstationsdaten_Andreas Lorke.xlsx", 
-    skip = 1, na=c("-99999,9")) 
+    skip = 1, na=c("-99999.9","-9999")) 
 meteo = meteo_raw %>%
-  mutate(across(where(is.numeric), ~ na_if(., -9999))) %>%
-  mutate(across(where(is.numeric), ~ na_if(., -99999.9)))
+  as.data.frame() %>%
+  mutate(across(where(is.numeric), ~ na_if(., -9999))) %>%      
+  mutate(across(where(is.numeric), ~ na_if(., -99999.9))) %>%   # refactor NAs
+  mutate(time=format(as_datetime(`~...1`),"%H:%M:%S"),
+         date=format(as_datetime(`~...2`),"%Y-%m-%d")) %>%                      
+  mutate(datetime=ymd(date) + hms(time))                        # datetime from date and time
 
-# create datetime column
-meteo$time = format(meteo$`~...1`, format = "%H:%M:%S")
-meteo$datetime =  as.POSIXct(paste(meteo$`~...2`, meteo$time), format = "%Y-%m-%d %H:%M:%S")
 
-# check for na vlaues
+# check for na values in all columns but the wind direction column WV
 na_df <- meteo %>%
-  select(SO,TE,FE,TP,WD,WR,RD,DR) %>%
+  select(SO,TE,FE,TP,WD,WR,RD,DR,RE) %>%
   filter(if_any(everything(), is.na))
 
-meteo_h =  meteo %>%
-  # Create a column for the hour
-  mutate(hour = floor_date(datetime, "hour")) %>%
-  # Group by hour column
-  group_by(hour) %>%
-  # summarize for each hour
-  summarise(across(everything(), 
-                   list(avg = ~ ifelse(cur_column() == "RD", sum(.), mean(.))), 
-                   .names = "{.col}")) %>%
-  # change hPa to Pa
-  mutate(DR = DR*100) %>%
-  # choose the required columns
-  select(hour,SO,TE,FE,TP,WD,WR,RD,DR) %>%
-  # name the columns as required
-  rename(datetime=hour,
-         Shortwave_Radiation_Downwelling_wattPerMeterSquared=SO,
-         Air_Temperature_celsius=TE,
-         Relative_Humidity_percent=FE,
-         Dewpoint_Temperature_celsius=TP,
-         Ten_Meter_Elevation_Wind_Speed_meterPerSecond=WD,
-         Ten_Meter_Elevation_Wind_Direction_degree=WR,
-         Rainfall_millimeterPerHour=RD,
-         Surface_Level_Barometric_Pressure_pascal=DR)
 
-# test for missing timesteps
-get_missing_datetimes = function(df){
-  start_time <- as.POSIXct("2020-06-01 00:00:00")
-  end_time <- as.POSIXct("2021-07-31 00:00:00")
-  complete_sequence <- seq(from = start_time, to = end_time, by = "hour")
-  missing_time_steps <- setdiff(complete_sequence, df$datetime)
-  missing_df <- data.frame(datetime = as.POSIXct(missing_time_steps))
-  result_df <- missing_df %>%
-    left_join(df, by = "datetime")
-  return(result_df)
-}
-missing_h_1 = get_missing_datetimes(meteo_h)
+meteo_10m_t = meteo %>%
+  # Melt the data to long format
+  pivot_longer(cols = -c(datetime,`~...1`,`~...2`,time,date), names_to = "variable", values_to = "value") %>%
+  # Create time groups
+  mutate(time_group = floor_date(datetime, unit = "10 minutes") + minutes(5)) %>%
+  # Group by time_group and variable
+  group_by(time_group, variable) %>%
+  # Summarise the data to ensure a single value per group
+  summarise(value = ifelse(variable == "RD", sum(value, na.rm = TRUE), mean(value, na.rm = TRUE)), 
+            .groups = "drop") %>%
+  # Gather back to wide format, ensuring unique values
+  pivot_wider(names_from = variable, values_from = value, values_fn = list(value = mean))
 
-# some missing time steps are not in simulation time --> drop all rows outside
-meteo_h_filtered = meteo_h %>%
-  ungroup() %>%
-  filter(as.Date(datetime) > as.Date("2020-06-15 00:00:00") &
-         as.Date(datetime) < as.Date("2021-07-31 00:00:00"))
+# fill missing steps in time series meteo data
+complete_time_series <- seq(from = min(meteo_10m_t$time_group, na.rm = TRUE), 
+                  to = max(meteo_10m_t$time_group, na.rm = TRUE), 
+                  by = "10 min")
 
-# test again
-missing_h_2 = get_missing_datetimes(meteo_h_filtered) %>%
-  filter(as.Date(datetime) > as.Date("2020-06-15 00:00:00") &
-         as.Date(datetime) < as.Date("2021-07-31 00:00:00"))
-print(missing_h_2)
+meteo_complete <- data.frame(time_group=complete_time_series) %>%
+  full_join(meteo_10m_t, by = "time_group")
 
-# TODO: Interpolate the missing data
-meteo_h_complete = rbind(meteo_h_filtered,missing_h_2) %>%
-  arrange(datetime)
+meteo_filled <- meteo_complete %>%
+#interpolate values
+  mutate(across(-c(time_group, WV), ~ zoo::na.approx(.))) %>%
+  select(time_group,SO,TE,FE,TP,WD,WR,RD,DR) %>%
+#hPa to Pa
+  mutate(DR = 100*DR) %>%
+#mm/10min to mm/hr
+  mutate(RD = 6*RD) %>%
+#rename and restructure to LakeEnsemblR Standard
+  rename(datetime=time_group,
+  Shortwave_Radiation_Downwelling_wattPerMeterSquared=SO,
+  Air_Temperature_celsius=TE,
+  Relative_Humidity_percent=FE,
+  Dewpoint_Temperature_celsius=TP,
+  Ten_Meter_Elevation_Wind_Speed_meterPerSecond=WD,
+  Ten_Meter_Elevation_Wind_Direction_degree=WR,
+  Rainfall_millimeterPerHour=RD,
+  Surface_Level_Barometric_Pressure_pascal=DR) %>%
+  mutate(datetime = format(datetime, "%Y-%m-%d %H:%M:%S")) %>%
+  select(datetime,Ten_Meter_Elevation_Wind_Speed_meterPerSecond,Air_Temperature_celsius,Relative_Humidity_percent,Shortwave_Radiation_Downwelling_wattPerMeterSquared,Surface_Level_Barometric_Pressure_pascal,Rainfall_millimeterPerHour)
 
-na.approx(meteo_h_complete, maxgap=Inf)
-# doesn't work
-# manual interpolation or
-# maybe fill with leading/tailing values? na.locf and na.fill(df, fill = tail(df, 1))
+# check for remaining NAs
+meteo_filled %>%
+  filter(if_any(everything(), is.na))
 
-write.csv(meteo_h_filtered, "LakeEnsemblR_meteo_EERES_hourly.csv", row.names = FALSE)
+# check for missing time steps
+all(meteo_filled$time_group == complete_time_series)
+
+write.table(meteo_filled, file = "LakeEnsemblR_meteo_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
 ```
 
 ## Example Model
@@ -150,7 +148,7 @@ library(LakeEnsemblR)
 getwd()
 
 # Set config file & models
-config_file <- "Data/LakeEnsemblR.yaml"
+config_file <- "LakeEnsemblR.yaml"
 model <- c("FLake", "GLM", "GOTM", "Simstrat", "MyLake")
 
 # Example run
@@ -158,11 +156,26 @@ model <- c("FLake", "GLM", "GOTM", "Simstrat", "MyLake")
 export_config(config_file = config_file, model = model)
 
 # 2. Run ensemble lake models
-run_ensemble(config_file = config_file, model = model)
+run_ensemble(config_file = config_file, model = model, parallel = T)
 
 ```
 
+
+
+TODO
+
+```{r multi-core run}
+ # for(i in seq_len(num_cores)){
+ #   core_job <- i
+ #   rstudioapi::jobRunScript(path = "run_LER_on_core.R",
+ #                            importEnv = TRUE,
+ #                            name = paste0("job_", i))
+ # }
+```
+
+
 # Analysis
+
 ```{r}
 
 # Load libraries for post-processing
@@ -184,5 +197,53 @@ p1 <- p1 +
 # Save as a png file
 ggsave('output/ensemble_heatmap.png', p1,  dpi = 300,width = 384,height = 280, units = 'mm')
 
+```
+
+```{r calibration}
+calc_fit(ncdf = "output/ensemble_output.nc", model = model)
+
+# run the calibration using the LHC method
+cali_res <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
+                          parallel = TRUE, model = model)
+
+# we can plot the results of the latin hypercube calibration for e.g. GOTM using plot_LHC
+plot_LHC(config_file = config_file, model = "GOTM", res_files = cali_res$GOTM,
+         qual_met = "nse")
+# or we can plot it for all models using
+plot_LHC(config_file = config_file, model = model, res_files = unlist(cali_res),
+         qual_met = "nse", best = "high")
+
+# load results of LHC in a data.frame
+res_LHC <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res))
+
+# get the best parameter set for each model using rmse
+best_p <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$rmse), ]), model)
+print(best_p)
+```
+
+
+```{r PlotEnsembleOUptput}
+# Plot ensemble mean at 0.9m
+model = c("FLake", "GLM", "GOTM", "Simstrat", "MyLake")
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.9)
+
+# Load watertemp from netCDF file as a list
+wtemp <- load_var(ncdf = ncdf, var = "temp", return = "list")
+names(wtemp)
+
+# Plot residual diagnostic plots
+plots <- plot_resid(var_list = wtemp) # Plot residuals - returns a list of plots
+names(plots) #
+
+# Plot residuals vs. depth ("res_depth")
+plots[[2]]
+
+# Analyse the netCDF output
+out <- analyse_ncdf(ncdf, model = model, spin_up = 0)
+names(out)
+str <- out[["strat"]]
+str[str$year == 2010, ]
+stats <- out[["stats"]]
+stats
 ```
 

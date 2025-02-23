@@ -5,12 +5,12 @@
 !------------------------------------------------------------------------------
 
 &SIMULATION_PARAMS
-del_time_lk   = 86400,! Time step [s]
-time_step_number = 200,! /LER/ The total number of time steps (17 years 1980-1996)
+del_time_lk   = 600,! Time step [s]
+time_step_number = 48274,! /LER/ The total number of time steps (17 years 1980-1996)
 save_interval_n  = 1        ! Saving interval in time steps
-T_wML_in = 6.128,! /LER/ initial temperature of the upper mixed layer
-T_bot_in = 6.255,! /LER/ initial temperature at the bottom
-h_ML_in = 16.05,! /LER/ initial mixed layer thickness
+T_wML_in = 18.85,! /LER/ initial temperature of the upper mixed layer
+T_bot_in = 18.39,! /LER/ initial temperature at the bottom
+h_ML_in = 0.2277,! /LER/ initial mixed layer thickness
 /
 
 
@@ -30,11 +30,11 @@ outputfile    = 'output/output.dat',
 !  Lake-specific parameters
 !------------------------------------------------------------------------------
 &LAKE_PARAMS
-depth_w_lk  = 16.05,! /LER/ Lake depth [m]
-fetch_lk    = 2000,      ! Typical wind fetch [m]
+depth_w_lk  = 0.2277,! /LER/ Lake depth [m]
+fetch_lk    = 2000,! Typical wind fetch [m]
 depth_bs_lk =  5.0,         ! Depth of the thermally active layer of the bottom sediments [m]
 T_bs_lk     =  4.0,         ! Temperature at the outer edge of the thermally active layer of the bottom sediments [C]
-latitude_lk = 53.9,! /LER/ Geographical latitude [dgr]
+latitude_lk = 49.2536112,! /LER/ Geographical latitude [dgr]
 c_relax_C = 0.0030, ! Adjustable constant in the relaxation equation for the shape factor
 /
 
@@ -53,7 +53,7 @@ extincoef_optic = 0.98,! /LER/ Extinction coefficients
 DTinflow = 0.0,    ! not relevant if inflows are not used
 DTfixed  = .true., ! not relevant if inflows are not used
 QS       = 0.0,    ! inflow rate per lake area [m/s], not relevant if inflows are not used
-Qfromfile = .true.,! /LER/
+Qfromfile = .false.,! /LER/
 Qfile='Tinflow',   ! a filename with inflow data should be substituted for 'Tinflow'
 time_step_number = 200 ! number of the model time steps, should be less than or equal to the number of rows in Qfile
 /
