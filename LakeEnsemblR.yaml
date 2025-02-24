@@ -3,12 +3,12 @@ location:
    latitude: 49.2536112                         # latitude [degrees North; min=-90.0; max=90.0]
    longitude: 7.9616667                         # longitude [degrees East; min=-360.0; max=360.0]
    elevation: 215                               # elevation of lake surface above sea level [m]
-   depth: 1.0                                   # maximum water depth [m; min=0.0]
+   depth: 1                                   # maximum water depth [m; min=0.0]
    hypsograph: hypsograph.csv                    # hypsograph [csv file]
    init_depth: 0.3                              # initial height of lake surface relative to the bottom [m]
 time:
-   start: 2020-07-21 10:35:00                   # start date and time [yyyy-mm-dd HH:MM:SS]
-   stop: 2021-06-21 16:15:00                    # stop date and time [yyyy-mm-dd HH:MM:SS]
+   start: 2020-07-22 00:00:00                   # start date and time [yyyy-mm-dd HH:MM:SS]
+   stop: 2021-06-14 00:00:00                    # stop date and time [yyyy-mm-dd HH:MM:SS]
    time_step: 600.0                            # time step for integration [s; min=0.0]
 config_files:
    GOTM: GOTM/gotm.yaml                         # GOTM config file [yaml file]
@@ -32,29 +32,28 @@ input:
       Kw:                                  # light extinction coefficient [m-1, or csv file]
          all: 0.98
    ice:
-      use: true                                 # turn on ice models? [true/false]
+      use: false                                 # turn on ice models? [true/false]
 inflows:
    use: false                                   # use in- and outflows? [true/false]
-   file: LakeEnsemblR_inflow_standard.csv       # file with inflow data, with column headers according to LakeEnsemblR vocabulary [csv file; must be provided if inflows -> use is true]
-   number_inflows: 2                            # number of inflows in the inflow file
-   fix_wlvl: false                              # Sets the water level in GOTM to a constant value. Reproduces LakeEnsemblR v1.0.0 behaviour.
+   file:                                        # file with inflow data, with column headers according to LakeEnsemblR vocabulary [csv file; must be provided if inflows -> use is true]
+   number_inflows:                           # number of inflows in the inflow file
+   fix_wlvl: true                              # Sets the water level in GOTM to a constant value. Reproduces LakeEnsemblR v1.0.0 behaviour.
 outflows:
    use: false                                   # use outflows? [true/false]
-   file: LakeEnsemblR_outflow_standard.csv      # file with outflow data, with column headers according to LakeEnsemblR vocabulary [csv file; must be provided if outflows -> use is true]
-   number_outflows: 1                           # number of outflows in the outflow file
-   outflow_lvl: -1                              # height of the outflow above the ground. If the outflow is a surface outflow use "-1". If there are more than one outflow in the outflow file, this must be a list with one value per outflow
+   file:                                        # file with outflow data, with column headers according to LakeEnsemblR vocabulary [csv file; must be provided if outflows -> use is true]
+   number_outflows:                           # number of outflows in the outflow file
+   outflow_lvl:                              # height of the outflow above the ground. If the outflow is a surface outflow use "-1". If there are more than one outflow in the outflow file, this must be a list with one value per outflow
 output:
    file: ensemble_output                        # name of output file, excluding extension
    format: netcdf                               # format [text/netcdf]
-   depths: 0.5                                  # depths to extract output [m]
+   depths: 0.05                                 # depths to extract output [m]
    compression: 4                               # set to an integer between 1 (least compression) and 9 (most compression), this enables compression for the variable as it is written to the file
    max_members: 25                              # maximum number of members of the same model that can be added to the netcdf
-   time_unit: hour                              # time unit [second, hour, day]
-   time_step: 24                                # number of time units between output [min=1]
-   time_method: mean                            # treatment of time dimension [point=instantaneous, mean, integrated; only used in GOTM]
+   time_unit: second                            # time unit [second, hour, day]
+   time_step: 600                               # number of time units between output [min=1]
+   time_method: point                            # treatment of time dimension [point=instantaneous, mean, integrated; only used in GOTM]
    variables:
       - temp
-      - ice_height
       - w_level
 scaling_factors:                                # scaling factors to apply to meteorological input, either for all models or model-specific. If not specified, no scaling is applied. If both "all" and model-specific are specified for a certain model, only the model-specific scaling is applied.
    all:
@@ -70,8 +69,8 @@ model_parameters:
    FLake:                                       # FLake specific parameters
       fetch_lk: 2000.0                          # typical wind fetch [m]
    GLM:                                         # GLM specific parameters
-      bsn_len: 3678                             # length of the lake basin, at crest height [m]
-      bsn_wid: 944                              # width of the lake basin, at crest height [m]
+      bsn_len: 11                               # length of the lake basin, at crest height [m]
+      bsn_wid: 4.5                              # width of the lake basin, at crest height [m]
    GOTM:                                        # GOTM specific parameters
       k_min: 3.6E-6                             # minimum turbulent kinetic energy [m^2/s^2; min=0.0]
    Simstrat:                                    # Simstrat specific parameters
@@ -103,8 +102,8 @@ calibration:                                    # calibration section
    GLM:                                         # GLM specific parameters
       mixing/coef_mix_hyp:
          lower: 0.1                             # lower bound for parameter
-         upper: 2                               # upper bound for parameter
-         initial: 1                             # initial value for parameter
+         upper: 1                               # upper bound for parameter
+         initial: 0.5                             # initial value for parameter
          log: false                             # log transform scaling factor
    GOTM:                                        # GOTM specific parameters
       turb_param/k_min:

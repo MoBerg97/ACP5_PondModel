@@ -1,7 +1,7 @@
 {
   "Input" : {
     "Initial conditions"  : "init_cond.dat",
-    "Grid"                : 2,
+    "Grid"                : 20,
     "Morphology"          : "hypsograph.dat",
     "Forcing"             : "meteo_file.dat",
     "Absorption"          : "light_absorption.dat",
@@ -12,8 +12,8 @@
   },
   "Output" : {
     "Path"  : "output",! Path to result folder
-    "Depths" : 0.5,! Output depths can be an integer (interpreted as interval in m), a list with depths or a path to a file (containing an integer or a list)
-    "Times"  : 144,! Output times can be a number (interpreted as frequency 1/days), a list with times or a path to a file (containing a number or a list)
+    "Depths" : 0.05,! Output depths can be an integer (interpreted as interval in m), a list with depths or a path to a file (containing an integer or a list)
+    "Times"  : 1,! Output times can be a number (interpreted as frequency 1/days), a list with times or a path to a file (containing a number or a list)
     "OutputDepthReference": "surface",                  ! "surface": depth of output variables is referenced to lake level, "bottom": depth of output variables is referenced to lake bottom
     "All"   : true,                                    ! True: All variables are written out, false: only variables in list "variables" are written
     "Variables" : ["T"]                                 ! Variables written to file (if "all" = false), example: ["T", "S", "WaterH"]
@@ -32,14 +32,14 @@
     "WindDragModel"           : 3,                      ! 1: constant, 2: ocean (increasing), 3: lake (Wüest and Lorke, 2003)
     "InflowMode"              : 0,! 0: no inflow; 1: manual inflow placement; 2: density-driven inflow
     "PressureGradients"       : 0,                      ! 0: off, 1: Svensson 1978
-    "IceModel"                : 1,! Switch to turn on/off the ice model
+    "IceModel"                : 0,! Switch to turn on/off the ice model
     "SnowModel"               : 1,! Switch to turn on/off the snow model (needs ice model and an additional column in forcing)
   },
   "Simulation" : {
     "Timestep s"                  : 600,! Simulation timestep in seconds
     "Start year"                  : 2020,! Starting year
-    "Start d"                     : 202.440972222222,! Simulation start in days since 01.01. of starting year.
-    "End d"                       : 537.677083333333,! Simulation end: in days since 01.01. of starting year. 
+    "Start d"                     : 203,! Simulation start in days since 01.01. of starting year.
+    "End d"                       : 530,! Simulation end: in days since 01.01. of starting year. 
     "DisplaySimulation"           : 0,                  ! 0: No display, 1: Display when output is written, 2: Display every iteration
     "Continue from last snapshot" : false               ! If true simulation continues from last snapshot (if present in output folder). Default: false
   },

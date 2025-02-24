@@ -29,8 +29,8 @@
    lake_name = 'EERES_pond'
    latitude = 49.25361
    longitude = 7.961667
-   bsn_len = 3678,
-   bsn_wid = 944,
+   bsn_len = 11,
+   bsn_wid = 4.5,
    bsn_vals = 4
    H = 214, 214.3, 214.6, 215
    A = 49.5, 95.04, 140.49, 176.25
@@ -38,8 +38,8 @@
 /
 &time
    timefmt = 2
-   start = '2020-07-21 10:35:00'
-   stop = '2021-06-21 16:15:00'
+   start = '2020-07-22 00:00:00'
+   stop = '2021-06-14 00:00:00'
    dt = 600
    num_days = 730
    timezone = 0
@@ -47,14 +47,14 @@
 &output
    out_dir = 'output'
    out_fn = 'output'
-   nsave = 144
+   nsave = 1
    csv_lake_fname = 'lake'
 /
 &init_profiles
    lake_depth = 0.3
    num_depths = 5
    the_depths = 0.3, 0.25, 0.2, 0.1, 0.05
-   the_temps = 18.39, 18.63, 18.64, 18.67, 18.85
+   the_temps = 20.49, 20.56, 20.63, 20.69, 20.67
    the_sals = 0, 0, 0, 0, 0
 /
 &meteorology
@@ -95,7 +95,7 @@
 /
 &outflow
    num_outlet = 0
-   outl_elvs = 399.5
+   outl_elvs = 214
    bsn_len_outl = 799
    bsn_wid_outl = 398
    outflow_fl = 'RivOutflow.csv'

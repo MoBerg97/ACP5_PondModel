@@ -59,7 +59,8 @@ EERES_T_long = pivot_longer(EERES_Temperature, cols=`30 cm`:`air`, names_to = "D
   mutate(Depth_meter = as.numeric(Depth_meter)/100) %>%
   select(-time) %>%
   select(datetime, Depth_meter, Water_Temperature_celsius) %>%
-filter(!is.na(Water_Temperature_celsius))
+  filter(!is.na(Water_Temperature_celsius)) %>%
+  mutate(datetime = format(floor_date(as_datetime(datetime), unit="10 minutes"),"%Y-%m-%d %H:%M:%S"))
 
 EERES_T_dropNAcol = EERES_T_long %>%
   filter(Depth_meter!=0.15)
@@ -86,11 +87,31 @@ na_df <- meteo %>%
   filter(if_any(everything(), is.na))
 
 
+# # 1h meteo data
+# 
+# meteo_1h_t = meteo %>%
+#   # Melt the data to long format
+#   pivot_longer(cols = -c(datetime,`~...1`,`~...2`,time,date), names_to = "variable", values_to = "value") %>%
+#   # Create time groups
+#   mutate(time_group = floor_date(datetime, unit = "1 hour") + minutes(5)) %>%
+#   # Group by time_group and variable
+#   group_by(time_group, variable) %>%
+#   # Summarise the data to ensure a single value per group
+#   summarise(value = ifelse(variable == "RD", sum(value, na.rm = TRUE), mean(value, na.rm = TRUE)), 
+#             .groups = "drop") %>%
+#   # Gather back to wide format, ensuring unique values
+#   pivot_wider(names_from = variable, values_from = value, values_fn = list(value = mean))
+
+
+
+
+# 10min meteo data
+
 meteo_10m_t = meteo %>%
   # Melt the data to long format
   pivot_longer(cols = -c(datetime,`~...1`,`~...2`,time,date), names_to = "variable", values_to = "value") %>%
   # Create time groups
-  mutate(time_group = floor_date(datetime, unit = "10 minutes") + minutes(5)) %>%
+  mutate(time_group = floor_date(datetime, unit = "10 minutes")) %>%
   # Group by time_group and variable
   group_by(time_group, variable) %>%
   # Summarise the data to ensure a single value per group
@@ -138,28 +159,98 @@ all(meteo_filled$time_group == complete_time_series)
 write.table(meteo_filled, file = "LakeEnsemblR_meteo_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
 ```
 
-## Example Model
+# Model
+
+Following Code runs the LER model. Output is already saved by moving ot folder output_FLake_GOTM.
 
 ```{r example}
-
-# Load LakeEnsemblR
-library(LakeEnsemblR)
-
 getwd()
-
+setwd("../")
 # Set config file & models
 config_file <- "LakeEnsemblR.yaml"
-model <- c("FLake", "GLM", "GOTM", "Simstrat", "MyLake")
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+model <- c("FLake","GOTM","Simstrat")
 
 # Example run
 # 1. Export settings - creates directories with all model setups and exports settings from the LER configuration file
 export_config(config_file = config_file, model = model)
 
 # 2. Run ensemble lake models
-run_ensemble(config_file = config_file, model = model, parallel = T)
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+
+#Check configs
+check_master_config(config_file= config_file, model=model, exp_cnf = T)
+get_template()
 
 ```
 
+Following Code can be used to run single models and check for errors.
+
+```{r singlemodelruns}
+setwd("C:/Users/morit/Documents/ACP5_PondModel")
+## Test FLake ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "FLake")
+
+setwd("FLake")
+
+FLakeR::run_flake(verbose = TRUE)
+out <- read.table("output/output.dat", skip = 1, header = TRUE)
+plot(out$time, out$Ts, type = "l")
+
+setwd("../")
+
+## Test GLM ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "GLM")
+
+setwd("GLM")
+
+GLM3r::run_glm(verbose = TRUE)
+out <- glmtools::get_var("output/output.nc", "temp", reference = "surface")
+plot(out$DateTime, out[, 2], type = "l")
+
+setwd("../")
+
+## Test GOTM ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "GOTM")
+
+setwd("GOTM")
+
+GOTMr::run_gotm(verbose = TRUE)
+out <- gotmtools::get_vari("output/output.nc", "temp")
+plot(out$time, out[, 2], type = "l")
+
+setwd("../")
+
+## Test Simstrat ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "Simstrat")
+
+setwd("Simstrat")
+
+SimstratR::run_simstrat(par_file = "simstrat.par", verbose = TRUE)
+out <- read.table(file.path("output", "T_out.dat"), header = TRUE, 
+                  sep = ",", check.names = FALSE)
+plot(1:nrow(out), out[, ncol(out)], type = "l")
+
+setwd("../")
+
+
+## Test MyLake ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "MyLake")
+
+# setwd("MyLake")
+MyLakeR::run_mylake(sim_folder = ".", config_dat = "mylake.Rdata")
+load("/MyLake/output/output.RData")
+plot(res$tt, res$Tzt[1, ], type = "l")
+
+setwd("../")
+
+# END
+```
 
 
 TODO
