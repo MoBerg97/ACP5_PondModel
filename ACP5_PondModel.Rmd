@@ -35,11 +35,12 @@ library(dplyr)
 library(readxl)
 library(zoo)
 library(data.table)
+library(ggplot2)
 ```
 
 # Task
 
-2.  Simulation of water temperature in scaled basins (original size of the mesocosms, x10, x100): What is the influence of basin size on water temperature and thermal stratification dynamics?
+2.  **Simulation of water temperature in scaled basins (original size of the mesocosms, x10, x100): What is the influence of basin size on water temperature and thermal stratification dynamics?**
 
 Note: When answering the above-mentioned research questions, the focus should be on the methodological aspects of the respective model applications and the necessary analyses. A detailed answer to the questions in the context of other scientific work goes beyond the scope of this course.
 
@@ -47,9 +48,11 @@ Portfolio: Description of methods, results and a (short) discussion. The importa
 
 ## Data Preparation
 
-The required format of data for the LakeEnsemblR model environment are csv tables containing the pond hypsograph, the Water Temperature Profile of the pond and the meteorological data. These files are prepared using the following code from the given datasets. LakeEnsemblR requires an input of surface level barometric pressure in Pa, therefore the transformation from hPa was undertaken. The wind direction and speed at 10m above surface should be delivered. The exact location of the anemometer was not known, hence it was assumed that the given data reflects this requirement. For ease of computational effort, the meteorological data is aggregated from minutely observations to hourly averages, and sum of rainfall in mm per hour respectively. Since a few observations across some hours were missing
+The required format of data for the LakeEnsemblR model environment are csv tables containing the pond hypsograph, the Water Temperature Profile of the pond and the meteorological data. These files are prepared using the following code from the given datasets.
 
-```{r dataprep}
+## Observed Data Preparation
+
+```{r wtempprep}
 # turn wide format of EERES Temperature to long format
 EERES_Temperature = read_csv("Data/EERES_Temperature.csv")
 EERES_T_long = pivot_longer(EERES_Temperature, cols=`30 cm`:`air`, names_to = "Depth_meter", values_to = "Water_Temperature_celsius") %>%
@@ -64,11 +67,45 @@ EERES_T_long = pivot_longer(EERES_Temperature, cols=`30 cm`:`air`, names_to = "D
 
 EERES_T_dropNAcol = EERES_T_long %>%
   filter(Depth_meter!=0.15)
+```
+
+## Interpolation of missing data
+
+To fill the observations the missing data at the depth of 15cm is interpolated from the temperature 5cm above and below.
+
+```{r}
+# Function to interpolate temperature for NA values at Depth_meter = 0.15
+interpolate_na_temperature <- function(data) {
+  # Filter for the specific datetime and depth
+  temp_data <- data %>% filter(Depth_meter %in% c(0.1, 0.2) & !is.na(Water_Temperature_celsius))
+  
+  if (nrow(temp_data) == 2) {
+    # Perform linear interpolation
+    interpolated_temp <- approx(temp_data$Depth_meter, temp_data$Water_Temperature_celsius, xout = 0.15)$y
+    return(interpolated_temp)
+  } else {
+    return(NA)  # Return NA if not enough data for interpolation
+  }
+}
+
+# Apply interpolation only for NA values at Depth_meter = 0.15
+EERES_T_long <- EERES_T_long %>%
+  group_by(datetime) %>%
+  mutate(Water_Temperature_celsius = ifelse(Depth_meter == 0.15 & is.na(Water_Temperature_celsius),
+                                             interpolate_na_temperature(cur_data()),
+                                             Water_Temperature_celsius)) %>%
+  ungroup()
 
 # write Water temperature to csv
-# write.csv(EERES_T_long,"LakeEnsemblR_wtemp_profile_EERES.csv",row.names=FALSE)
-write.table(EERES_T_dropNAcol, file = "LakeEnsemblR_wtemp_profile_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
+write.table(EERES_T_long, file = "LakeEnsemblR_wtemp_profile_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
+# write.table(EERES_T_dropNAcol, file = "LakeEnsemblR_wtemp_profile_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
+```
 
+## Meteo Data Preparation
+
+Following code presents the preparation of the meteorological data. This is done by aggregation of the meteorological data to the temporal scale of the observed data (1min to 10min). This is done via averages, and sum of rainfall in mm per hour respectively. LakeEnsemblR requires an input of surface level barometric pressure in Pa, therefore the transformation from hPa was undertaken. The wind direction and speed at 10m above surface should be delivered. The exact location of the anemometer was not known, hence it was assumed that the given data reflects this requirement.
+
+```{r meteoprep}
 # Meteorological data
 meteo_raw = read_xlsx("Data/20200101-20211231_Wetterstationsdaten_Andreas Lorke.xlsx", 
     skip = 1, na=c("-99999.9","-9999")) 
@@ -85,25 +122,6 @@ meteo = meteo_raw %>%
 na_df <- meteo %>%
   select(SO,TE,FE,TP,WD,WR,RD,DR,RE) %>%
   filter(if_any(everything(), is.na))
-
-
-# # 1h meteo data
-# 
-# meteo_1h_t = meteo %>%
-#   # Melt the data to long format
-#   pivot_longer(cols = -c(datetime,`~...1`,`~...2`,time,date), names_to = "variable", values_to = "value") %>%
-#   # Create time groups
-#   mutate(time_group = floor_date(datetime, unit = "1 hour") + minutes(5)) %>%
-#   # Group by time_group and variable
-#   group_by(time_group, variable) %>%
-#   # Summarise the data to ensure a single value per group
-#   summarise(value = ifelse(variable == "RD", sum(value, na.rm = TRUE), mean(value, na.rm = TRUE)), 
-#             .groups = "drop") %>%
-#   # Gather back to wide format, ensuring unique values
-#   pivot_wider(names_from = variable, values_from = value, values_fn = list(value = mean))
-
-
-
 
 # 10min meteo data
 
@@ -161,11 +179,13 @@ write.table(meteo_filled, file = "LakeEnsemblR_meteo_EERES.csv", sep = ",", dec 
 
 # Model
 
+## Ensemble model run
+
 Following Code runs the LER model. Output is already saved by moving ot folder output_FLake_GOTM.
 
-```{r example}
+```{r ensemblemodel}
 getwd()
-setwd("../")
+# setwd("../")
 # Set config file & models
 config_file <- "LakeEnsemblR.yaml"
 # model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
@@ -183,6 +203,69 @@ check_master_config(config_file= config_file, model=model, exp_cnf = T)
 get_template()
 
 ```
+
+## Calibration
+
+TODO: cali_ensemble doesn't work because of: `Fehler in seq.POSIXt(as.POSIXct(start, tz = tz), as.POSIXct(stop, tz = tz),  :    ungültige Zeichenkette für 'by'`
+
+```{r}
+calc_fit(ncdf = "output/ensemble_output.nc", model = model)
+
+# run the calibration using the LHC method
+cali_res <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
+                          parallel = TRUE, model = model)
+
+# we can plot the results of the latin hypercube calibration for e.g. GOTM using plot_LHC
+plot_LHC(config_file = config_file, model = "GOTM", res_files = cali_res$GOTM,
+         qual_met = "nse")
+# or we can plot it for all models using
+plot_LHC(config_file = config_file, model = model, res_files = unlist(cali_res),
+         qual_met = "nse", best = "high")
+
+# load results of LHC in a data.frame
+res_LHC <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res))
+
+# get the best parameter set for each model using rmse
+best_p <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$rmse), ]), model)
+print(best_p)
+```
+
+## Model runs of enlarged basin
+
+TODO: Think about setting fix_wtlvl to false since this may be important for stratification dynamics. TODO: Set the initial water temperature on a scientifically based information (Use the known temperature and add lower temperatures at lower depths)
+
+```{r scaledmodel}
+# 10x depth ----
+getwd()
+config_file <- "LakeEnsemblR_10depth.yaml"
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+model <- c("FLake","GOTM","Simstrat")
+export_config(config_file = config_file, model = model)
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+file.rename(paste0(getwd(),"output"),
+            paste0(getwd(),"output_10depth"))
+
+
+# 10x area ----
+config_file <- "LakeEnsemblR_10area.yaml"
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+model <- c("FLake","GOTM","Simstrat")
+export_config(config_file = config_file, model = model)
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+file.rename(paste0(getwd(),"output"),
+            paste0(getwd(),"output_10area"))
+
+# 10x area and 10x depth ----
+config_file <- "LakeEnsemblR_10area10depth.yaml"
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+model <- c("FLake","GOTM","Simstrat")
+export_config(config_file = config_file, model = model)
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+file.rename(paste0(getwd(),"output"),
+            paste0(getwd(),"output_10area10depth"))
+```
+
+## Single model runs
 
 Following Code can be used to run single models and check for errors.
 
@@ -252,26 +335,11 @@ setwd("../")
 # END
 ```
 
-
-TODO
-
-```{r multi-core run}
- # for(i in seq_len(num_cores)){
- #   core_job <- i
- #   rstudioapi::jobRunScript(path = "run_LER_on_core.R",
- #                            importEnv = TRUE,
- #                            name = paste0("job_", i))
- # }
-```
-
-
 # Analysis
 
-```{r}
+Now we plot the heatmap of the ensemble run.
 
-# Load libraries for post-processing
-library(ggplot2)
-
+```{r ensembleheatmap}
 ## Plot model output using gotmtools/ggplot2
 # Extract names of all the variables in netCDF
 ncdf <- 'output/ensemble_output.nc'
@@ -279,39 +347,19 @@ vars <- gotmtools::list_vars(ncdf)
 vars # Print variables
 
 p1 <- plot_heatmap(ncdf)
-p1
+# p1
 # Change the theme and increase text size for saving
 p1 <- p1 +
   theme_classic(base_size = 24) + 
   scale_colour_gradientn(limits = c(0, 21),
                          colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
 # Save as a png file
-ggsave('output/ensemble_heatmap.png', p1,  dpi = 300,width = 384,height = 280, units = 'mm')
+p1
+# ggsave('output/ensemble_heatmap.png', p1,  dpi = 300,width = 384,height = 280, units = 'mm')
 
 ```
 
-```{r calibration}
-calc_fit(ncdf = "output/ensemble_output.nc", model = model)
-
-# run the calibration using the LHC method
-cali_res <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
-                          parallel = TRUE, model = model)
-
-# we can plot the results of the latin hypercube calibration for e.g. GOTM using plot_LHC
-plot_LHC(config_file = config_file, model = "GOTM", res_files = cali_res$GOTM,
-         qual_met = "nse")
-# or we can plot it for all models using
-plot_LHC(config_file = config_file, model = model, res_files = unlist(cali_res),
-         qual_met = "nse", best = "high")
-
-# load results of LHC in a data.frame
-res_LHC <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res))
-
-# get the best parameter set for each model using rmse
-best_p <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$rmse), ]), model)
-print(best_p)
-```
-
+TODO: not looked into this yet
 
 ```{r PlotEnsembleOUptput}
 # Plot ensemble mean at 0.9m
@@ -337,4 +385,3 @@ str[str$year == 2010, ]
 stats <- out[["stats"]]
 stats
 ```
-
