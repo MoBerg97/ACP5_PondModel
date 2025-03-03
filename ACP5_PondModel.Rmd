@@ -4,7 +4,7 @@ author: "Moritz Berg"
 date: "`r Sys.Date()`"
 output: html_document
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
@@ -19,6 +19,16 @@ knitr::opts_chunk$set(echo = TRUE, results = "hide")
 # remotes::install_github("aemon-j/SimstratR")
 # remotes::install_github("aemon-j/MyLakeR")
 # remotes::install_github("aemon-j/LakeEnsemblR")
+# install.packages("C:/Users/morit/Documents/LakeEnsemblR", repos = NULL, type="source")
+library(ggplot2)
+library(readr)
+library(lubridate)
+library(tidyr)
+library(dplyr)
+library(readxl)
+# library(zoo)
+# library(data.table)
+
 library(rLakeAnalyzer)
 library(GLM3r)
 library(glmtools)
@@ -28,14 +38,6 @@ library(gotmtools)
 library(SimstratR)
 library(MyLakeR)
 library(LakeEnsemblR)
-library(readr)
-library(lubridate)
-library(tidyr)
-library(dplyr)
-library(readxl)
-library(zoo)
-library(data.table)
-library(ggplot2)
 ```
 
 # Task
@@ -177,13 +179,74 @@ all(meteo_filled$time_group == complete_time_series)
 write.table(meteo_filled, file = "LakeEnsemblR_meteo_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
 ```
 
-# Model
+```{r sample data}
+generate_random_meteo_data <- function(template, n) {
+  sample_data <- data.frame(datetime = template$datetime)  # Keep datetime unchanged
+  
+  # Generate new data for each numeric column
+  for (col in names(template)[-1]) {  # Exclude the datetime column
+    if (is.numeric(template[[col]])) {
+      # Get min and max values for the column
+      min_val <- min(template[[col]], na.rm = TRUE)
+      max_val <- max(template[[col]], na.rm = TRUE)
+      
+      # Calculate mean and standard deviation of the original column
+      mean_val <- mean(template[[col]], na.rm = TRUE)
+      sd_val <- sd(template[[col]], na.rm = TRUE)
+      
+      # Generate new values based on normal distribution
+      new_values <- rnorm(n, mean = mean_val, sd = sd_val)
+      
+      # Ensure values are within the specified bounds
+      new_values <- pmax(new_values, min_val)  # Set a lower bound
+      new_values <- pmin(new_values, max_val)  # Set an upper bound
+      
+      sample_data[[col]] <- new_values
+    }
+  }
+  
+  return(sample_data)
+}
 
-## Ensemble model run
+# Generate a new sample dataframe based on the template
+set.seed(123)  # For reproducibility
+n_samples <- nrow(meteo_filled)  # Number of samples to generate
+new_random_meteo_df <- generate_random_meteo_data(meteo_filled, n_samples)
 
-Following Code runs the LER model. Output is already saved by moving ot folder output_FLake_GOTM.
+# Function to generate new random data for Water_Temperature_celsius
+generate_random_EERES_data <- function(template, n) {
+  sample_data <- data.frame(datetime = template$datetime, Depth_meter = template$Depth_meter)  # Keep datetime and Depth unchanged
+  
+  # Get min and max values for Water_Temperature_celsius
+  min_temp <- min(template$Water_Temperature_celsius, na.rm = TRUE)
+  max_temp <- max(template$Water_Temperature_celsius, na.rm = TRUE)
+  
+  # Generate new temperature values
+  mean_temp <- mean(template$Water_Temperature_celsius, na.rm = TRUE)
+  sd_temp <- sd(template$Water_Temperature_celsius, na.rm = TRUE)
+  
+  # Generate new temperature values and ensure they are within the specified bounds
+  new_temp_values <- rnorm(n, mean = mean_temp, sd = sd_temp)
+  new_temp_values <- pmax(new_temp_values, min_temp)  # Ensure values are not below min_temp
+  new_temp_values <- pmin(new_temp_values, max_temp)  # Ensure values are not above max_temp
+  
+  sample_data$Water_Temperature_celsius <- new_temp_values
+  
+  return(sample_data)
+}
 
-```{r ensemblemodel}
+
+# Generate a new sample dataframe based on the template
+set.seed(123)  # For reproducibility
+n_samples <- nrow(EERES_T_long)  # Number of samples to generate
+new_random_EERES_df <- generate_random_EERES_data(EERES_T_long, n_samples)
+
+write.table(new_random_meteo_df, file = "LakeEnsemblR_meteo.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+write.table(new_random_EERES_df, file = "LakeEnsemblR_wtemp_profile.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
+```
+
+```{r sampleLERtest}
 getwd()
 # setwd("../")
 # Set config file & models
@@ -198,73 +261,177 @@ export_config(config_file = config_file, model = model)
 # 2. Run ensemble lake models
 run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
 
+ncdf <- 'output/ensemble_output.nc'
+vars <- gotmtools::list_vars(ncdf)
+vars # Print variables
+
+p1 <- plot_heatmap(ncdf)
+p1 <- p1 +
+  theme_classic(base_size = 24) + 
+  scale_colour_gradientn(limits = c(0, 21),
+                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+p1
+
+```
+
+# Model
+
+## Ensemble model run
+
+Following Code runs the LER model. Output is already saved by moving ot folder output_FLake_GOTM.
+
+```{r ensemblemodel}
+getwd()
+# setwd("../")
+# Set config file & models
+config_file <- "LakeEnsemblR_EERES.yaml"
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+model <- c("FLake","GOTM","Simstrat")
+# model <- c("FLake","GOTM")
+
+# Example run
+# 1. Export settings - creates directories with all model setups and exports settings from the LER configuration file
+export_config(config_file = config_file, model = model)
+
+# 2. Run ensemble lake models
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+
 #Check configs
-check_master_config(config_file= config_file, model=model, exp_cnf = T)
-get_template()
+# check_master_config(config_file= config_file, model=model, exp_cnf = T)
+# get_template()
 
 ```
 
 ## Calibration
 
-TODO: cali_ensemble doesn't work because of: `Fehler in seq.POSIXt(as.POSIXct(start, tz = tz), as.POSIXct(stop, tz = tz),  :    ungültige Zeichenkette für 'by'`
+The calibration is done using the function cali_ensemble. Due to errors by using this function on all models simultaneously, the results will be generated for each model solely. For each model, a calibration using a set of 100 parameter combinations is used. A Latin Hypercube Calibration (LHC) method is used in the calibration.
+With the function plot_LHC, the results can be shown graphically.
 
 ```{r}
-calc_fit(ncdf = "output/ensemble_output.nc", model = model)
+## getting the model fit of the last ensemble run
+# calc_fit(ncdf = "output/ensemble_output.nc", model = model)
 
 # run the calibration using the LHC method
-cali_res <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
-                          parallel = TRUE, model = model)
+cali_res_Simstrat <- cali_ensemble(config_file = config_file, num = 100, cmethod = "LHC",
+                          parallel = FALSE, model = "SimStrat")
+cali_res_GOTM <- cali_ensemble(config_file = config_file, num = 100, cmethod = "LHC",
+                          parallel = FALSE, model = "GOTM")
+cali_res_FLake <- cali_ensemble(config_file = config_file, num = 100, cmethod = "LHC",
+                          parallel = FALSE, model = "FLake")
 
 # we can plot the results of the latin hypercube calibration for e.g. GOTM using plot_LHC
-plot_LHC(config_file = config_file, model = "GOTM", res_files = cali_res$GOTM,
-         qual_met = "nse")
-# or we can plot it for all models using
-plot_LHC(config_file = config_file, model = model, res_files = unlist(cali_res),
+plot_LHC(config_file = config_file, model = "GOTM", res_files = cali_res_GOTM$GOTM,
          qual_met = "nse", best = "high")
+# or we can plot it for all models using
+plot_LHC(config_file = config_file, model = "FLake", res_files = cali_res_FLake$FLake,
+         qual_met = "nse", best = "high")
+plot_LHC(config_file = config_file, model = "SimStrat", res_files = cali_res_Simstrat$Simstrat,
+         qual_met = "nse", best="high")
+``` 
 
+The results of the calibration can be extracted using load_LHC_results. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency  (NSE) and mean absolute error (MAE) is printed.
+
+```{r bestsets}
 # load results of LHC in a data.frame
+model = c("FLake","GOTM","Simstrat")
+cali_res = list(cali_res_FLake,cali_res_GOTM,cali_res_Simstrat)
 res_LHC <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res))
 
+# Use res_LHC to investigate the results of the calibration
+
 # get the best parameter set for each model using rmse
-best_p <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$rmse), ]), model)
-print(best_p)
+best_p_rmse <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$rmse), ]), model)
+best_p_nse <- setNames(lapply(model, function(m)res_LHC[[m]][which.max(res_LHC[[m]]$nse), ]), model)
+best_p_mae <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$mae), ]), model)
+print("Set of parameters with lowest RMSE:")
+print(best_p_rmse)
+print("Set of parameters with highest NSE:")
+print(best_p_rmse)
+print("Set of parameters with lowest MAE:")
+print(best_p_rmse)
 ```
 
-## Model runs of enlarged basin
+Since the parameters for wind speed (wind_speed) and shortwave radiation scaling (swr) are shared across all the models, the mean value of these from the best sets of parameters is calculated. The model specific parameters are printed below.
 
-TODO: Think about setting fix_wtlvl to false since this may be important for stratification dynamics. TODO: Set the initial water temperature on a scientifically based information (Use the known temperature and add lower temperatures at lower depths)
+```{r bestparams}
+# Initialize a list to store the mean values for each model
+mean_values <- list()
 
-```{r scaledmodel}
-# 10x depth ----
-getwd()
-config_file <- "LakeEnsemblR_10depth.yaml"
-# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
-model <- c("FLake","GOTM","Simstrat")
-export_config(config_file = config_file, model = model)
-run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
-file.rename(paste0(getwd(),"output"),
-            paste0(getwd(),"output_10depth"))
+# Initialize vectors to store wind_speed and swr values across all models
+all_wind_speed <- c()
+all_swr <- c()
+all_kW <- c()
 
+# Function to calculate mean values for a given model
+calculate_means <- function(model_name) {
+  # Extract dataframes for the model from each list
+  df_rmse <- best_p_rmse[[model_name]]
+  df_nse <- best_p_nse[[model_name]]
+  df_mae <- best_p_mae[[model_name]]
 
-# 10x area ----
-config_file <- "LakeEnsemblR_10area.yaml"
-# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
-model <- c("FLake","GOTM","Simstrat")
-export_config(config_file = config_file, model = model)
-run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
-file.rename(paste0(getwd(),"output"),
-            paste0(getwd(),"output_10area"))
+  # Combine the dataframes
+  combined_df <- rbind(df_rmse, df_nse, df_mae)
 
-# 10x area and 10x depth ----
-config_file <- "LakeEnsemblR_10area10depth.yaml"
-# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
-model <- c("FLake","GOTM","Simstrat")
-export_config(config_file = config_file, model = model)
-run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
-file.rename(paste0(getwd(),"output"),
-            paste0(getwd(),"output_10area10depth"))
+  # Calculate mean for the specified parameters
+  mean_wind_speed <- mean(combined_df$wind_speed, na.rm = TRUE)
+  mean_swr <- mean(combined_df$swr, na.rm = TRUE)
+  mean_Kw <- mean(combined_df$Kw, na.rm = TRUE)
+
+  # Check if the parameter exists in the combined dataframe before calculating mean
+  mean_a_seiche <- ifelse("a_seiche" %in% colnames(combined_df),
+                           mean(combined_df$a_seiche, na.rm = TRUE), NA)
+  mean_turb_param_k_min <- ifelse("turb_param.k_min" %in% colnames(combined_df),
+                                   mean(combined_df$turb_param.k_min, na.rm = TRUE), NA)
+  mean_c_relax_C <- ifelse("c_relax_C" %in% colnames(combined_df),
+                           mean(combined_df$c_relax_C, na.rm = TRUE), NA)
+
+  # Append wind_speed and swr values to the global vectors
+  all_wind_speed <<- c(all_wind_speed, combined_df$wind_speed)
+  all_swr <<- c(all_swr, combined_df$swr)
+  all_Kw <<- c(all_kW, combined_df$Kw)
+
+  # Return the means as a named vector
+  return(c(mean_wind_speed, mean_swr, mean_Kw, mean_a_seiche, mean_turb_param_k_min, mean_c_relax_C))
+}
+
+# Calculate means for each model
+mean_values$FLake <- calculate_means("FLake")
+mean_values$GOTM <- calculate_means("GOTM")
+mean_values$Simstrat <- calculate_means("Simstrat")
+
+# Convert the list to a dataframe for better visualization
+mean_values_df <- do.call(rbind, mean_values)
+colnames(mean_values_df) <- c("mean_wind_speed", "mean_swr", "mean_Kw", "mean_a_seiche", "mean_turb_param.k_min", "mean_c_relax_C")
+
+# Calculate overall mean for wind_speed and swr across all models
+overall_mean_wind_speed <- mean(all_wind_speed, na.rm = TRUE)
+overall_mean_swr <- mean(all_swr, na.rm = TRUE)
+overall_mean_Kw <- mean(all_Kw, na.rm=TRUE)
+
+# Print the mean values for each model
+cat("Parameter combination with best fit: \n")
+print(mean_values_df)
+
+# Print the overall mean values
+cat("Overall mean wind_speed across all models:", overall_mean_wind_speed, "\n")
+cat("Overall mean swr across all models:", overall_mean_swr, "\n")
+cat("Overall mean Kw across all models:", overall_mean_Kw)
+```
+These parameters were implemented in a new configuration file (LakeEnsemblR_EERES_bestparams.yaml).
+
+## Model Run with best parameters
+
+Followingly, the ensemble is run with the calibrated parameters.
+ TODO: all.
+
+```{r bestparamrun}
+config_file = "LakeEnsemblR_EERES_bestparams.yaml"
+model = c("FLake","GOTM","Simstrat")
+
 ```
 
+
+# Appendix Model
 ## Single model runs
 
 Following Code can be used to run single models and check for errors.
@@ -334,6 +501,64 @@ setwd("../")
 
 # END
 ```
+
+## Model runs of enlarged basin
+
+<!-- TODO: Think about setting fix_wtlvl to false since this may be important for stratification dynamics. TODO: Set the initial water temperature on a scientifically based information (Use the known temperature and add lower temperatures at lower depths) -->
+
+<!-- ```{r scaledmodel} -->
+
+<!-- # 10x depth ---- -->
+
+<!-- getwd() -->
+
+<!-- config_file <- "LakeEnsemblR_10depth.yaml" -->
+
+<!-- # model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake") -->
+
+<!-- model <- c("FLake","GOTM","Simstrat") -->
+
+<!-- export_config(config_file = config_file, model = model) -->
+
+<!-- run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4) -->
+
+<!-- file.rename(paste0(getwd(),"output"), -->
+
+<!--             paste0(getwd(),"output_10depth")) -->
+
+<!-- # 10x area ---- -->
+
+<!-- config_file <- "LakeEnsemblR_10area.yaml" -->
+
+<!-- # model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake") -->
+
+<!-- model <- c("FLake","GOTM","Simstrat") -->
+
+<!-- export_config(config_file = config_file, model = model) -->
+
+<!-- run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4) -->
+
+<!-- file.rename(paste0(getwd(),"output"), -->
+
+<!--             paste0(getwd(),"output_10area")) -->
+
+<!-- # 10x area and 10x depth ---- -->
+
+<!-- config_file <- "LakeEnsemblR_10area10depth.yaml" -->
+
+<!-- # model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake") -->
+
+<!-- model <- c("FLake","GOTM","Simstrat") -->
+
+<!-- export_config(config_file = config_file, model = model) -->
+
+<!-- run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4) -->
+
+<!-- file.rename(paste0(getwd(),"output"), -->
+
+<!--             paste0(getwd(),"output_10area10depth")) -->
+
+<!-- ``` -->
 
 # Analysis
 

@@ -1,7 +1,7 @@
 location:
-   name: EERES_pond                             # name of the lake
-   latitude: 49.2536112                         # latitude [degrees North; min=-90.0; max=90.0]
-   longitude: 7.9616667                         # longitude [degrees East; min=-360.0; max=360.0]
+   name: SMALL_POND                             # name of the lake
+   latitude: 50                         # latitude [degrees North; min=-90.0; max=90.0]
+   longitude: 8                        # longitude [degrees East; min=-360.0; max=360.0]
    elevation: 215                               # elevation of lake surface above sea level [m]
    depth: 1                                   # maximum water depth [m; min=0.0]
    hypsograph: hypsograph.csv                    # hypsograph [csv file]
@@ -18,7 +18,7 @@ config_files:
    MyLake: MyLake/mylake.Rdata                  # MyLake config file [Rdata file]
 observations:
    temperature:
-      file: LakeEnsemblR_wtemp_profile_EERES.csv            # file with observed water temperature profiles, with column headers according to LakeEnsemblR vocabulary [csv file; if none use NULL or leave empty]
+      file: LakeEnsemblR_wtemp_profile.csv            # file with observed water temperature profiles, with column headers according to LakeEnsemblR vocabulary [csv file; if none use NULL or leave empty]
    ice_height:
       file: NULL                                            # file with observed ice height, with column headers according to LakeEnsemblR vocabulary [csv file; if none use NULL or leave empty]
    water_level:
@@ -27,7 +27,7 @@ input:
    init_temp_profile:
       file: NULL                                # initial temperature profile [csv file; if none use NULL or leave empty; if empty/NULL, the observations file will be used]
    meteo:
-      file: LakeEnsemblR_meteo_EERES.csv        # file with meteorological forcing data, with column headers according to LakeEnsemblR vocabulary [csv file]
+      file: LakeEnsemblR_meteo.csv        # file with meteorological forcing data, with column headers according to LakeEnsemblR vocabulary [csv file]
    light:
       Kw:                                  # light extinction coefficient [m-1, or csv file]
          all: 0.98
