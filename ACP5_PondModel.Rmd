@@ -2,14 +2,16 @@
 title: "ACP5-PondModel"
 author: "Moritz Berg"
 date: "`r Sys.Date()`"
-output: html_document
+output: 
+  html_document: 
+    df_print: tibble
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, results = "hide")
-# Sys.setenv("R_REMOTES_NO_ERRORS_FROM_WARNINGS" = "true")
+# knitr::opts_chunk$set(echo = TRUE)
+Sys.setenv("R_REMOTES_NO_ERRORS_FROM_WARNINGS" = "true")
 # remotes::install_github("GLEON/rLakeAnalyzer")
 # remotes::install_github("aemon-j/GLM3r", ref = "v3.1.1")
 # remotes::install_github("USGS-R/glmtools", ref = "ggplot_overhaul")
@@ -18,31 +20,24 @@ knitr::opts_chunk$set(echo = TRUE, results = "hide")
 # remotes::install_github("aemon-j/gotmtools")
 # remotes::install_github("aemon-j/SimstratR")
 # remotes::install_github("aemon-j/MyLakeR")
-# remotes::install_github("aemon-j/LakeEnsemblR")
+remotes::install_github("aemon-j/LakeEnsemblR")
 # install.packages("C:/Users/morit/Documents/LakeEnsemblR", repos = NULL, type="source")
-library(ggplot2)
 library(readr)
 library(lubridate)
-library(tidyr)
 library(dplyr)
+library(tidyr) 
+library(readr)
 library(readxl)
-# library(zoo)
-# library(data.table)
-
-library(rLakeAnalyzer)
-library(GLM3r)
-library(glmtools)
-library(FLakeR)
-library(GOTMr)
+library(zoo)
+library(data.table)
+library(ggplot2)
 library(gotmtools)
-library(SimstratR)
-library(MyLakeR)
 library(LakeEnsemblR)
 ```
 
 # Task
 
-2.  **Simulation of water temperature in scaled basins (original size of the mesocosms, x10, x100): What is the influence of basin size on water temperature and thermal stratification dynamics?**
+**Validation of the models against observational data. Random and Systematic Discrepancies.**
 
 Note: When answering the above-mentioned research questions, the focus should be on the methodological aspects of the respective model applications and the necessary analyses. A detailed answer to the questions in the context of other scientific work goes beyond the scope of this course.
 
@@ -53,6 +48,8 @@ Portfolio: Description of methods, results and a (short) discussion. The importa
 The required format of data for the LakeEnsemblR model environment are csv tables containing the pond hypsograph, the Water Temperature Profile of the pond and the meteorological data. These files are prepared using the following code from the given datasets.
 
 ## Observed Data Preparation
+
+The
 
 ```{r wtempprep}
 # turn wide format of EERES Temperature to long format
@@ -67,8 +64,9 @@ EERES_T_long = pivot_longer(EERES_Temperature, cols=`30 cm`:`air`, names_to = "D
   filter(!is.na(Water_Temperature_celsius)) %>%
   mutate(datetime = format(floor_date(as_datetime(datetime), unit="10 minutes"),"%Y-%m-%d %H:%M:%S"))
 
-EERES_T_dropNAcol = EERES_T_long %>%
-  filter(Depth_meter!=0.15)
+# Optionally discard the Temperature at 15cm depth due to missing data
+# EERES_T_dropNAcol = EERES_T_long %>%
+#   filter(Depth_meter!=0.15)
 ```
 
 ## Interpolation of missing data
@@ -179,7 +177,7 @@ all(meteo_filled$time_group == complete_time_series)
 write.table(meteo_filled, file = "LakeEnsemblR_meteo_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
 ```
 
-```{r sample data}
+```{r Nullmodeldata, results=hide, include=FALSE}
 generate_random_meteo_data <- function(template, n) {
   sample_data <- data.frame(datetime = template$datetime)  # Keep datetime unchanged
   
@@ -246,7 +244,7 @@ write.table(new_random_meteo_df, file = "LakeEnsemblR_meteo.csv", sep = ",", dec
 write.table(new_random_EERES_df, file = "LakeEnsemblR_wtemp_profile.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
 ```
 
-```{r sampleLERtest}
+```{r Nullmodel, results=hide, include=FALSE}
 getwd()
 # setwd("../")
 # Set config file & models
@@ -278,7 +276,7 @@ p1
 
 ## Ensemble model run
 
-Following Code runs the LER model. Output is already saved by moving ot folder output_FLake_GOTM.
+Following Code runs the LER model. There are issues using GLM and MyLake in shallow ponds, therefore all following simulations are done using exclusively FLake, GOTM or Simstrat. We found that the model FLake calculates a mean depth of the lake from the volume (calculated from truncated square pyramids between the layers) and the surface area. This however seems to reduce the depth of shallow ponds below the depths of observed layers. Therefore we manually set the depth of the pond for FLake using the parameter `depth_w_lk`.
 
 ```{r ensemblemodel}
 getwd()
@@ -287,54 +285,64 @@ getwd()
 config_file <- "LakeEnsemblR_EERES.yaml"
 # model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
 model <- c("FLake","GOTM","Simstrat")
-# model <- c("FLake","GOTM")
 
 # Example run
 # 1. Export settings - creates directories with all model setups and exports settings from the LER configuration file
 export_config(config_file = config_file, model = model)
 
 # 2. Run ensemble lake models
-run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 3)
 
 #Check configs
 # check_master_config(config_file= config_file, model=model, exp_cnf = T)
-# get_template()
-
 ```
 
 ## Calibration
 
-The calibration is done using the function cali_ensemble. Due to errors by using this function on all models simultaneously, the results will be generated for each model solely. For each model, a calibration using a set of 100 parameter combinations is used. A Latin Hypercube Calibration (LHC) method is used in the calibration.
-With the function plot_LHC, the results can be shown graphically.
+The calibration is done using the function cali_ensemble. Due to errors by using this function on all models simultaneously, the results will be generated for each model solely. For each model, a calibration using a set of 100 parameter combinations is used. A Latin Hypercube Calibration (LHC) method is used in the calibration. With the function `plot_LHC`, the results can be shown graphically.
+
+Depending on some arguments given to cali_ensemble (we guess `parallel`), the output of the function will either be the results or the names of the .csv files which store the parameter sets and results. Due to this inconsistency in the code, we manually select the generated results from the folder "cali".
 
 ```{r}
-## getting the model fit of the last ensemble run
-# calc_fit(ncdf = "output/ensemble_output.nc", model = model)
+# getting the model fit of the last ensemble run
+calc_fit(ncdf = "output/ensemble_output.nc", model = model)
 
-# run the calibration using the LHC method
-cali_res_Simstrat <- cali_ensemble(config_file = config_file, num = 100, cmethod = "LHC",
-                          parallel = FALSE, model = "SimStrat")
-cali_res_GOTM <- cali_ensemble(config_file = config_file, num = 100, cmethod = "LHC",
-                          parallel = FALSE, model = "GOTM")
-cali_res_FLake <- cali_ensemble(config_file = config_file, num = 100, cmethod = "LHC",
-                          parallel = FALSE, model = "FLake")
+config_file = "LakeEnsemblR_EERES_bestparams.yaml"
 
-# we can plot the results of the latin hypercube calibration for e.g. GOTM using plot_LHC
-plot_LHC(config_file = config_file, model = "GOTM", res_files = cali_res_GOTM$GOTM,
+# # run the calibration using the LHC method
+# cali_res_Simstrat <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
+#                           parallel = T, model = "SimStrat", ncores = 3)
+# cali_res_GOTM <- cali_ensemble(config_file = config_file, num = 30, cmethod = "LHC",
+#                           parallel = T, model = "GOTM", ncores = 3)
+cali_res_FLake <- cali_ensemble(config_file = config_file, num = 30, cmethod = "LHC",
+                          parallel = T, model = "FLake", ncores = 3)
+
+# we manually set the file names with the results
+res_file_GOTM <- paste0(getwd(),
+                            c("/cali/params_GOTM_LHC_n500.csv",
+                              "/cali/GOTM_LHC_n500.csv"))
+res_file_FLake <- paste0(getwd(),
+                            c("/cali/params_FLake_LHC_n100.csv",
+                              "/cali/FLake_LHC_n100.csv"))
+res_file_Simstrat <- paste0(getwd(),
+                            c("/cali/params_Simstrat_LHC_n500.csv",
+                              "/cali/Simstrat_LHC_n500.csv"))
+# we can plot the results of the latin hypercube calibrations using plot_LHC
+plot_LHC(config_file = config_file, model = "GOTM", res_files = res_file_GOTM,
          qual_met = "nse", best = "high")
 # or we can plot it for all models using
-plot_LHC(config_file = config_file, model = "FLake", res_files = cali_res_FLake$FLake,
+plot_LHC(config_file = config_file, model = "FLake", res_files = res_file_FLake,
          qual_met = "nse", best = "high")
-plot_LHC(config_file = config_file, model = "SimStrat", res_files = cali_res_Simstrat$Simstrat,
+plot_LHC(config_file = config_file, model = "SimStrat", res_files = res_file_Simstrat,
          qual_met = "nse", best="high")
-``` 
+```
 
-The results of the calibration can be extracted using load_LHC_results. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency  (NSE) and mean absolute error (MAE) is printed.
+The results of the calibration can be extracted using `load_LHC_results`. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency (NSE) and mean absolute error (MAE) is printed.
 
 ```{r bestsets}
 # load results of LHC in a data.frame
 model = c("FLake","GOTM","Simstrat")
-cali_res = list(cali_res_FLake,cali_res_GOTM,cali_res_Simstrat)
+cali_res = list(res_file_FLake,res_file_GOTM,res_file_Simstrat)
 res_LHC <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res))
 
 # Use res_LHC to investigate the results of the calibration
@@ -351,7 +359,7 @@ print("Set of parameters with lowest MAE:")
 print(best_p_rmse)
 ```
 
-Since the parameters for wind speed (wind_speed) and shortwave radiation scaling (swr) are shared across all the models, the mean value of these from the best sets of parameters is calculated. The model specific parameters are printed below.
+We see that the best fitting parameter is independent of the quality metric used (RMSE, NSE or MAE). Subsequently, we will use this set of parameters in the following model. Since the parameters for wind speed (wind_speed) and shortwave radiation scaling (swr) are shared across all the models, the mean value of these from the best sets of parameters is calculated in the following code. The model specific parameters are printed below.
 
 ```{r bestparams}
 # Initialize a list to store the mean values for each model
@@ -417,21 +425,113 @@ cat("Overall mean wind_speed across all models:", overall_mean_wind_speed, "\n")
 cat("Overall mean swr across all models:", overall_mean_swr, "\n")
 cat("Overall mean Kw across all models:", overall_mean_Kw)
 ```
-These parameters were implemented in a new configuration file (LakeEnsemblR_EERES_bestparams.yaml).
+
+These parameters were implemented as initial parameters in a new configuration file (LakeEnsemblR_EERES_bestparams.yaml).
+
+## Extending the calibration range
+
+Now we expand the range of possible values since some of the best parameter sets have values close to the upper or lower bounds.
+
+```{r, results='hide'}
+config_file = "LakeEnsemblR_EERES_bestparams.yaml"
+model = c("FLake","GOTM","Simstrat")
+cali_res_GOTM_Simstrat_expanded <- cali_ensemble(config_file = config_file, num = 500, 
+                                                 cmethod = "LHC", parallel = FALSE, 
+                                                 model = c("GOTM","Simstrat"), 
+                                                 ncores = 2)
+cali_res_FLake_expanded <- cali_ensemble(config_file = config_file, num = 1,
+                                         cmethod = "LHC", parallel = FALSE,
+                                         model = "FLake")
+
+plot_Simstrat = plot_LHC(config_file = config_file, 
+         model = "Simstrat", 
+         res_files = cali_res_GOTM_Simstrat_expanded$Simstrat,
+         qual_met = "nse", best = "high")
+plot_GOTM = plot_LHC(config_file = config_file, 
+         model = "GOTM", 
+         res_files = cali_res_GOTM_Simstrat_expanded$GOTM,
+         qual_met = "nse", best = "high")
+plot_FLake = plot_LHC(config_file = config_file, 
+                      res_files = cali_res_FLake_expanded$FLake, 
+                      model="FLake",
+                      qual_met = "nse", best="high")
+
+cali_res_all = list(cali_res_FLake,cali_res_GOTM,cali_res_Simstrat)
+res_LHC_all <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res_all))
+
+# Use res_LHC to investigate the results of the calibration
+
+# get the best parameter set for each model using rmse
+best_p_rmse <- setNames(lapply(model, function(m)res_LHC_all[[m]][which.min(res_LHC_all[[m]]$rmse), ]), model)
+best_p_nse <- setNames(lapply(model, function(m)res_LHC_all[[m]][which.max(res_LHC_all[[m]]$nse), ]), model)
+best_p_mae <- setNames(lapply(model, function(m)res_LHC_all[[m]][which.min(res_LHC_all[[m]]$mae), ]), model)
+```
 
 ## Model Run with best parameters
 
-Followingly, the ensemble is run with the calibrated parameters.
- TODO: all.
+Followingly, the ensemble is run with the calibrated parameters. TODO: all.
 
 ```{r bestparamrun}
-config_file = "LakeEnsemblR_EERES_bestparams.yaml"
+config_file = "LakeEnsemblR_EERES_calibrated.yaml"
 model = c("FLake","GOTM","Simstrat")
+export_config(config_file = config_file, model = model)
+run_ensemble(config_file = config_file, model = model, parallel=T)
+```
+
+# Analysis
+
+Now we plot the heatmap of the ensemble run.
+
+```{r ensembleheatmap}
+## Plot model output using gotmtools/ggplot2
+# Extract names of all the variables in netCDF
+ncdf <- 'output/ensemble_output.nc'
+vars <- gotmtools::list_vars(ncdf)
+vars # Print variables
+
+p1 <- plot_heatmap(ncdf)
+# p1
+# Change the theme and increase text size for saving
+p1 <- p1 +
+  
+  theme_classic(base_size = 24) + 
+  scale_colour_gradientn(limits = c(0, 21),
+                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+# Save as a png file
+p1
+# ggsave('output/ensemble_heatmap.png', p1,  dpi = 300,width = 384,height = 280, units = 'mm')
 
 ```
 
+TODO: not looked into this yet
 
-# Appendix Model
+```{r PlotEnsembleOUptput}
+# Plot ensemble mean at 0.9m
+model = c("FLake", "GOTM", "Simstrat")
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.25)
+
+# Load watertemp from netCDF file as a list
+wtemp <- load_var(ncdf = ncdf, var = "temp", return = "list")
+names(wtemp)
+
+# Plot residual diagnostic plots
+plots <- plot_resid(var_list = wtemp) # Plot residuals - returns a list of plots
+names(plots) #
+
+# Plot residuals vs. depth ("res_depth")
+plots[[2]]
+
+# Analyse the netCDF output
+out <- analyse_ncdf(ncdf, model = model, spin_up = 0)
+names(out)
+str <- out[["strat"]]
+str[str$year == 2010, ]
+stats <- out[["stats"]]
+stats
+```
+
+# Appendix
+
 ## Single model runs
 
 Following Code can be used to run single models and check for errors.
@@ -504,109 +604,58 @@ setwd("../")
 
 ## Model runs of enlarged basin
 
-<!-- TODO: Think about setting fix_wtlvl to false since this may be important for stratification dynamics. TODO: Set the initial water temperature on a scientifically based information (Use the known temperature and add lower temperatures at lower depths) -->
+TODO: Think about setting fix_wtlvl to false since this may be important for stratification dynamics. TODO: Set the initial water temperature on a scientifically based information (Use the known temperature and add lower temperatures at lower depths)
 
-<!-- ```{r scaledmodel} -->
+```{r scaledmodel}
 
-<!-- # 10x depth ---- -->
+# 10x depth ----
 
-<!-- getwd() -->
+getwd()
 
-<!-- config_file <- "LakeEnsemblR_10depth.yaml" -->
+config_file <- "LakeEnsemblR_10depth.yaml"
 
-<!-- # model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake") -->
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
 
-<!-- model <- c("FLake","GOTM","Simstrat") -->
+model <- c("FLake","GOTM","Simstrat")
 
-<!-- export_config(config_file = config_file, model = model) -->
+export_config(config_file = config_file, model = model)
 
-<!-- run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4) -->
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
 
-<!-- file.rename(paste0(getwd(),"output"), -->
+file.rename(paste0(getwd(),"output"),
 
-<!--             paste0(getwd(),"output_10depth")) -->
+            paste0(getwd(),"output_10depth"))
 
-<!-- # 10x area ---- -->
+# 10x area ----
 
-<!-- config_file <- "LakeEnsemblR_10area.yaml" -->
+config_file <- "LakeEnsemblR_10area.yaml"
 
-<!-- # model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake") -->
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
 
-<!-- model <- c("FLake","GOTM","Simstrat") -->
+model <- c("FLake","GOTM","Simstrat")
 
-<!-- export_config(config_file = config_file, model = model) -->
+export_config(config_file = config_file, model = model)
 
-<!-- run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4) -->
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
 
-<!-- file.rename(paste0(getwd(),"output"), -->
+file.rename(paste0(getwd(),"output"),
 
-<!--             paste0(getwd(),"output_10area")) -->
+            paste0(getwd(),"output_10area"))
 
-<!-- # 10x area and 10x depth ---- -->
+# 10x area and 10x depth ----
 
-<!-- config_file <- "LakeEnsemblR_10area10depth.yaml" -->
+config_file <- "LakeEnsemblR_10area10depth.yaml"
 
-<!-- # model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake") -->
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
 
-<!-- model <- c("FLake","GOTM","Simstrat") -->
+model <- c("FLake","GOTM","Simstrat")
 
-<!-- export_config(config_file = config_file, model = model) -->
+export_config(config_file = config_file, model = model)
 
-<!-- run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4) -->
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
 
-<!-- file.rename(paste0(getwd(),"output"), -->
+file.rename(paste0(getwd(),"output"),
 
-<!--             paste0(getwd(),"output_10area10depth")) -->
+            paste0(getwd(),"output_10area10depth"))
 
-<!-- ``` -->
-
-# Analysis
-
-Now we plot the heatmap of the ensemble run.
-
-```{r ensembleheatmap}
-## Plot model output using gotmtools/ggplot2
-# Extract names of all the variables in netCDF
-ncdf <- 'output/ensemble_output.nc'
-vars <- gotmtools::list_vars(ncdf)
-vars # Print variables
-
-p1 <- plot_heatmap(ncdf)
-# p1
-# Change the theme and increase text size for saving
-p1 <- p1 +
-  theme_classic(base_size = 24) + 
-  scale_colour_gradientn(limits = c(0, 21),
-                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
-# Save as a png file
-p1
-# ggsave('output/ensemble_heatmap.png', p1,  dpi = 300,width = 384,height = 280, units = 'mm')
-
-```
-
-TODO: not looked into this yet
-
-```{r PlotEnsembleOUptput}
-# Plot ensemble mean at 0.9m
-model = c("FLake", "GLM", "GOTM", "Simstrat", "MyLake")
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.9)
-
-# Load watertemp from netCDF file as a list
-wtemp <- load_var(ncdf = ncdf, var = "temp", return = "list")
-names(wtemp)
-
-# Plot residual diagnostic plots
-plots <- plot_resid(var_list = wtemp) # Plot residuals - returns a list of plots
-names(plots) #
-
-# Plot residuals vs. depth ("res_depth")
-plots[[2]]
-
-# Analyse the netCDF output
-out <- analyse_ncdf(ncdf, model = model, spin_up = 0)
-names(out)
-str <- out[["strat"]]
-str[str$year == 2010, ]
-stats <- out[["stats"]]
-stats
 ```

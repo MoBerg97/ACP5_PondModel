@@ -26,9 +26,9 @@
    diff = 0
 /
 &morphometry
-   lake_name = 'SMALL_POND'
-   latitude = 50
-   longitude = 8
+   lake_name = 'EERES_pond'
+   latitude = 49.25361
+   longitude = 7.961667
    bsn_len = 11,
    bsn_wid = 4.5,
    bsn_vals = 4
@@ -47,14 +47,14 @@
 &output
    out_dir = 'output'
    out_fn = 'output'
-   nsave = 1
+   nsave = 144
    csv_lake_fname = 'lake'
 /
 &init_profiles
    lake_depth = 0.3
    num_depths = 6
    the_depths = 0.3, 0.25, 0.2, 0.15, 0.1, 0.05
-   the_temps = 15.74, 6.548, 20.14, 7.742, 9.441, 18.76
+   the_temps = 20.49, 20.56, 20.63, 20.68, 20.69, 20.67
    the_sals = 0, 0, 0, 0, 0, 0
 /
 &meteorology

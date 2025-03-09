@@ -1,4 +1,5 @@
 Version: 1.0
+ProjectId: 38999cd7-b823-4e63-ae30-9aa0916b7ee0
 
 RestoreWorkspace: Yes
 SaveWorkspace: Yes
@@ -11,3 +12,5 @@ Encoding: UTF-8
 
 RnwWeave: Sweave
 LaTeX: pdfLaTeX
+
+SpellingDictionary: en_US

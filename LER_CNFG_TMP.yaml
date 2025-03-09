@@ -1,0 +1,136 @@
+location:
+   name: EERES_pond
+   latitude: 49.2536112
+   longitude: 7.9616667
+   elevation: 215
+   depth: 1
+   hypsograph: hypsograph.csv
+   init_depth: 0.3
+time:
+   start: 2020-07-22 00:00:00
+   stop: 2021-06-14 00:00:00
+   time_step: 600.0
+config_files:
+   GOTM: GOTM/gotm.yaml
+   GLM: GLM/glm3.nml
+   Simstrat: Simstrat/simstrat.par
+   FLake: FLake/flake.nml
+   MyLake: MyLake/mylake.Rdata
+observations:
+   temperature:
+      file: LakeEnsemblR_wtemp_profile_EERES.csv
+   ice_height:
+      file: ~
+   water_level:
+      file: ~
+input:
+   init_temp_profile:
+      file: ~
+   meteo:
+      file: LakeEnsemblR_meteo_EERES.csv
+   light:
+      Kw:
+         all: 0.98
+   ice:
+      use: no
+inflows:
+   use: no
+   file: ~
+   number_inflows: ~
+   fix_wlvl: no
+outflows:
+   use: no
+   file: ~
+   number_outflows: ~
+   outflow_lvl: ~
+output:
+   file: ensemble_output
+   format: netcdf
+   depths: 0.05
+   compression: 1
+   max_members: 25
+   time_unit: hour
+   time_step: 1
+   time_method: point
+   variables:
+   - temp
+   - w_level
+scaling_factors:
+   all:
+      wind_speed: 1.0
+      swr: 1.0
+      inflow:
+      - 1.0
+      - 1.0
+      outflow: 1.0
+   Simstrat:
+      wind_speed: 1.0
+model_parameters:
+   FLake:
+      fetch_lk: 10.0
+      depth_w_lk: 0.3
+   GLM:
+      bsn_len: 11
+      bsn_wid: 4.5
+   GOTM:
+      k_min: 3.6e-06
+   Simstrat: ~
+   MyLake:
+      Phys.par/C_shelter: 0.15
+calibration:
+   met:
+      wind_speed:
+         lower: 0.5
+         upper: 2
+         initial: 1
+         log: no
+      swr:
+         lower: 0.5
+         upper: 1.5
+         initial: 1
+         log: no
+   Kw:
+      lower: 0.5
+      upper: 1.5
+      initial: 0.98
+      log: no
+   FLake:
+      c_relax_C:
+         lower: 1.0e-08
+         upper: 0.01
+         initial: 0.003
+         log: no
+      depth_bs_lk:
+         lower: 0
+         upper: 5
+         initial: 1
+         log: no
+      T_bs_lk:
+         lower: 0
+         upper: 10
+         initial: 4
+         log: no
+   GLM:
+      mixing/coef_mix_hyp:
+         lower: 0.001
+         upper: 1
+         initial: 0.5
+         log: no
+   GOTM:
+      turb_param/k_min:
+         lower: 5E-10
+         upper: 5E-2
+         initial: 1E-5
+         log: yes
+   Simstrat:
+      a_seiche:
+         lower: 1.0e-06
+         upper: 0.01
+         initial: 0.001
+         log: no
+   MyLake:
+      Phys.par/C_shelter:
+         lower: 0.14
+         upper: 0.16
+         initial: 0.15
+         log: no

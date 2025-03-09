@@ -30,12 +30,12 @@ outputfile    = 'output/output.dat',
 !  Lake-specific parameters
 !------------------------------------------------------------------------------
 &LAKE_PARAMS
-depth_w_lk  = 0.2277,! /LER/ Lake depth [m]
-fetch_lk    = 2000,! Typical wind fetch [m]
+depth_w_lk  = 0.3,! /LER/ Lake depth [m]
+fetch_lk    = 10,! Typical wind fetch [m]
 depth_bs_lk =  5.0,         ! Depth of the thermally active layer of the bottom sediments [m]
 T_bs_lk     =  4.0,         ! Temperature at the outer edge of the thermally active layer of the bottom sediments [C]
 latitude_lk = 49.2536112,! /LER/ Geographical latitude [dgr]
-c_relax_C = 0.0083628,! Adjustable constant in the relaxation equation for the shape factor
+c_relax_C = 0.0081778,! Adjustable constant in the relaxation equation for the shape factor
 /
 
 
@@ -46,7 +46,7 @@ c_relax_C = 0.0083628,! Adjustable constant in the relaxation equation for the s
 &TRANSPARENCY
 nband_optic =     1        ! Number of wave-length bands
 frac_optic =      1        ! Fractions of total radiation flux
-extincoef_optic = 0.71072,! /LER/ Extinction coefficients
+extincoef_optic = 0.98,! /LER/ Extinction coefficients
 /
 
 &inflow
