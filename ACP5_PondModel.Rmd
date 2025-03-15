@@ -20,8 +20,9 @@ Sys.setenv("R_REMOTES_NO_ERRORS_FROM_WARNINGS" = "true")
 # remotes::install_github("aemon-j/gotmtools")
 # remotes::install_github("aemon-j/SimstratR")
 # remotes::install_github("aemon-j/MyLakeR")
-remotes::install_github("aemon-j/LakeEnsemblR")
+# remotes::install_github("aemon-j/LakeEnsemblR")
 # install.packages("C:/Users/morit/Documents/LakeEnsemblR", repos = NULL, type="source")
+setwd("Documents/ACP5_PondModel/")
 library(readr)
 library(lubridate)
 library(dplyr)
@@ -339,8 +340,6 @@ res_file_Simstrat <- paste0(getwd(),
 # plot_LHC(config_file = config_file, model = "SimStrat", res_files = res_file_Simstrat,
 #          qual_met = "nse", best="high")
 ```
-
-<!-- The results of the calibration can be extracted using `load_LHC_results`. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency (NSE) and mean absolute error (MAE) is printed. -->
 
 The simulations using different sets of parameters were subsequently analyzed, aiming to identify parameter values which minimize deviations from observed data. For this purpose a composite error metric combining RMSE, NSE, Bias and **R^2** was calculated. Parameter values which minimized this composite score were chosen as the calibrated value.
 
@@ -767,14 +766,14 @@ ggplot(out_df, aes(x = date, y = temp, color = model)) +
 ## Calibration different methods
 ```{r}
 
-params_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_Simstrat_LHC_n500.csv")
-em_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/Simstrat_LHC_n500.csv")
+params_Sim = read.csv("cali/params_Simstrat_LHC_n500.csv")
+em_Sim = read.csv("cali/Simstrat_LHC_n500.csv")
 
-params_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_GOTM_LHC_n500.csv")
-em_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/GOTM_LHC_n500.csv")
+params_GOTM = read.csv("cali/params_GOTM_LHC_n500.csv")
+em_GOTM = read.csv("cali/GOTM_LHC_n500.csv")
 
-params_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_FLake_LHC_n100.csv")
-em_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/FLake_LHC_n100.csv")
+params_FLake = read.csv("cali/params_FLake_LHC_n100.csv")
+em_FLake = read.csv("cali/FLake_LHC_n100.csv")
 
 join_Sim = full_join(params_Sim, em_Sim, by = "par_id")
 join_GOTM = full_join(params_GOTM, em_GOTM, by = "par_id")
