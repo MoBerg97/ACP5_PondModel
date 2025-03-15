@@ -33,6 +33,9 @@ library(data.table)
 library(ggplot2)
 library(gotmtools)
 library(LakeEnsemblR)
+library(patchwork)
+library(randomForest)
+
 ```
 
 # Task
@@ -299,7 +302,7 @@ run_ensemble(config_file = config_file, model = model, parallel = T, return_list
 
 ## Calibration
 
-The calibration is done using the function cali_ensemble. Due to errors by using this function on all models simultaneously, the results will be generated for each model solely. For each model, a calibration using a set of 100 parameter combinations is used. A Latin Hypercube Calibration (LHC) method is used in the calibration. With the function `plot_LHC`, the results can be shown graphically.
+The calibration is done using the function cali_ensemble. Due to errors by using this function on all models simultaneously, the results will be generated for each model individually For each model, a calibration using a set of 500 parameter combinations is used for the models Simstrat and GOTM. For FLake only 100 parameter combinations were used due to technical obstacles. A Latin Hypercube Calibration (LHC) method is used in the calibration. With the function `plot_LHC`, the results can be shown graphically.
 
 Depending on some arguments given to cali_ensemble (we guess `parallel`), the output of the function will either be the results or the names of the .csv files which store the parameter sets and results. Due to this inconsistency in the code, we manually select the generated results from the folder "cali".
 
@@ -327,145 +330,287 @@ res_file_FLake <- paste0(getwd(),
 res_file_Simstrat <- paste0(getwd(),
                             c("/cali/params_Simstrat_LHC_n500.csv",
                               "/cali/Simstrat_LHC_n500.csv"))
-# we can plot the results of the latin hypercube calibrations using plot_LHC
-plot_LHC(config_file = config_file, model = "GOTM", res_files = res_file_GOTM,
-         qual_met = "nse", best = "high")
-# or we can plot it for all models using
-plot_LHC(config_file = config_file, model = "FLake", res_files = res_file_FLake,
-         qual_met = "nse", best = "high")
-plot_LHC(config_file = config_file, model = "SimStrat", res_files = res_file_Simstrat,
-         qual_met = "nse", best="high")
+# # we can plot the results of the latin hypercube calibrations using plot_LHC
+# plot_LHC(config_file = config_file, model = "GOTM", res_files = res_file_GOTM,
+#          qual_met = "nse", best = "high")
+# # or we can plot it for all models using
+# plot_LHC(config_file = config_file, model = "FLake", res_files = res_file_FLake,
+#          qual_met = "nse", best = "high")
+# plot_LHC(config_file = config_file, model = "SimStrat", res_files = res_file_Simstrat,
+#          qual_met = "nse", best="high")
 ```
 
-The results of the calibration can be extracted using `load_LHC_results`. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency (NSE) and mean absolute error (MAE) is printed.
+<!-- The results of the calibration can be extracted using `load_LHC_results`. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency (NSE) and mean absolute error (MAE) is printed. -->
 
-```{r bestsets}
-# load results of LHC in a data.frame
-model = c("FLake","GOTM","Simstrat")
-cali_res = list(res_file_FLake,res_file_GOTM,res_file_Simstrat)
-res_LHC <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res))
+The simulations using different sets of parameters were subsequently analyzed, aiming to identify parameter values which minimize deviations from observed data. For this purpose a composite error metric combining RMSE, NSE, Bias and **R^2** was calculated. Parameter values which minimized this composite score were chosen as the calibrated value.
 
-# Use res_LHC to investigate the results of the calibration
+```{r parameter calibration}
+params_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_Simstrat_LHC_n500.csv")
+em_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/Simstrat_LHC_n500.csv")
 
-# get the best parameter set for each model using rmse
-best_p_rmse <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$rmse), ]), model)
-best_p_nse <- setNames(lapply(model, function(m)res_LHC[[m]][which.max(res_LHC[[m]]$nse), ]), model)
-best_p_mae <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$mae), ]), model)
-print("Set of parameters with lowest RMSE:")
-print(best_p_rmse)
-print("Set of parameters with highest NSE:")
-print(best_p_rmse)
-print("Set of parameters with lowest MAE:")
-print(best_p_rmse)
+params_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_GOTM_LHC_n500.csv")
+em_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/GOTM_LHC_n500.csv")
+
+params_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_FLake_LHC_n100.csv")
+em_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/FLake_LHC_n100.csv")
+
+join_Sim = full_join(params_Sim, em_Sim, by = "par_id")
+join_GOTM = full_join(params_GOTM, em_GOTM, by = "par_id")
+join_FLake = full_join(params_FLake, em_FLake, by = "par_id")
+
+
+## Merge data sets for calibration of shared parameters
+Sim_red = join_Sim %>% select(-a_seiche, -par_id)
+GOTM_red = join_GOTM %>% select(-turb_param.k_min, -par_id)
+FLake_red = join_FLake %>% select(-c_relax_C, -par_id)
+
+shared = rbind(Sim_red, GOTM_red, FLake_red)
+
+
+
+#### Calculate composite error metric score ####
+
+## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+w1 = 1/sd(join_Sim$rmse) # RMSE
+w2 = 1/sd((1-join_Sim$nse)) # NSE
+w3 = 1/sd(abs(join_Sim$bias)) # Bias
+w4 = 1/sd(1- join_Sim$r) # R^2
+
+## Compisite error metric
+join_Sim$score = w1*join_Sim$rmse + w2*(1-join_Sim$nse) + w3*abs(join_Sim$bias) + w4*(1- join_Sim$r)
+
+
+## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+w5 = 1/sd(join_GOTM$rmse) # RMSE
+w6 = 1/sd((1-join_GOTM$nse)) # NSE
+w7 = 1/sd(abs(join_GOTM$bias)) # Bias
+w8 = 1/sd(1- join_GOTM$r) # R^2
+
+## Compisite error metric
+join_GOTM$score = w5*join_GOTM$rmse + w6*(1-join_GOTM$nse) + w7*abs(join_GOTM$bias) + w8*(1- join_GOTM$r)
+
+
+## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+w9 = 1/sd(join_FLake$rmse) # RMSE
+w10 = 1/sd((1-join_FLake$nse)) # NSE
+w11 = 1/sd(abs(join_FLake$bias)) # Bias
+w12 = 1/sd(1- join_FLake$r) # R^2
+
+## Compisite error metric
+join_FLake$score = w9*join_FLake$rmse + w10*(1-join_FLake$nse) + w11*abs(join_FLake$bias) + w12*(1- join_FLake$r)
+
+
+## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+w13 = 1/sd(shared$rmse) # RMSE
+w14 = 1/sd((1-shared$nse)) # NSE
+w15 = 1/sd(abs(shared$bias)) # Bias
+w16 = 1/sd(1- shared$r) # R^2
+
+## Compisite error metric
+shared$score = w13*shared$rmse + w14*(1-shared$nse) + w15*abs(shared$bias) + w16*(1- shared$r)
+
+##### Shared model parameters #####
+
+## Wind speed
+
+# Extract the computed density data from ggplot
+dens_data <- ggplot_build(
+  ggplot(shared, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+)$data[[1]]
+
+# Find wind speed where density is maximized
+optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+
+
+
+
+a_ws = ggplot(shared, aes(x = wind_speed, y = score)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", color = "blue") +
+  geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+  labs(title = "Composite Score vs Wind Speed",
+       x = "Wind Speed",
+       y = "Composite Score")
+
+b_ws = ggplot(shared, aes(x = wind_speed)) +
+  geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+  geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+  labs(title = "Density of Wind Speed for Low Composite Score",
+       x = "Wind Speed",
+       y = "Weighted Density")
+
+a_ws+b_ws
+
+## Optimal wind speed
+print(optimal_wind_speed)
+
+
+## SWR
+# Extract the computed density data from ggplot
+dens_data <- ggplot_build(
+  ggplot(shared, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+)$data[[1]]
+
+# Find wind speed where density is maximized
+optimal_swr <- dens_data$x[which.max(dens_data$y)]
+
+
+a_swr = ggplot(shared, aes(x = swr, y = score)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", color = "blue") +
+  geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+  labs(title = "Composite Score vs swr",
+       x = "swr",
+       y = "Composite Score")
+
+b_swr = ggplot(shared, aes(x = swr)) +
+  geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+  geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+  labs(title = "Density of swr for Low Composite Score",
+       x = "swr",
+       y = "Weighted Density")
+
+a_swr+b_swr
+
+print(optimal_swr)
+
+## Kw
+# Extract the computed density data from ggplot
+dens_data <- ggplot_build(
+  ggplot(shared, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+)$data[[1]]
+
+# Find wind speed where density is maximized
+optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+
+
+a_Kw = ggplot(shared, aes(x = Kw, y = score)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", color = "blue") +
+  geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+  labs(title = "Composite Score vs Kw",
+       x = "Kw",
+       y = "Composite Score")
+
+b_Kw = ggplot(shared, aes(x = Kw)) +
+  geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+  geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+  labs(title = "Density of Kw for Low Composite Score",
+       x = "Kw",
+       y = "Weighted Density")
+
+a_Kw+b_Kw
+
+print(optimal_Kw)
+
+
+#### Model specific parameters ####
+
+  ##### Simstrat #####
+    
+    ## a_seiche
+    # Extract the computed density data from ggplot
+    dens_data <- ggplot_build(
+      ggplot(join_Sim, aes(x = a_seiche)) +
+        geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+    )$data[[1]]
+    
+    # Find wind speed where density is maximized
+    optimal_a_seiche <- dens_data$x[which.max(dens_data$y)]
+    
+    
+    a_a_seiche = ggplot(join_Sim, aes(x = a_seiche, y = score)) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(method = "loess", color = "blue") +
+      geom_vline(xintercept = optimal_a_seiche, color = "red", linetype = "dashed") +
+      labs(title = "Composite Score vs a_seiche",
+           x = "a_seiche",
+           y = "Composite Score")
+    
+    b_a_seiche = ggplot(join_Sim, aes(x = a_seiche)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+      geom_vline(xintercept = optimal_a_seiche, color = "red", linetype = "dashed") +
+      labs(title = "Density of a_seiche for Low Composite Score",
+           x = "a_seiche",
+           y = "Weighted Density")
+    
+    a_a_seiche+b_a_seiche
+    
+    print(optimal_a_seiche)
+    
+  ##### GOTM #####
+    
+    ## turb_param.k_min
+    # Extract the computed density data from ggplot
+    dens_data <- ggplot_build(
+      ggplot(join_GOTM, aes(x = turb_param.k_min)) +
+        geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+    )$data[[1]]
+    
+    # Find wind speed where density is maximized
+    optimal_turb_param.k_min <- dens_data$x[which.max(dens_data$y)]
+    
+    
+    a_turb_param.k_min = ggplot(join_GOTM, aes(x = turb_param.k_min, y = score)) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(method = "loess", color = "blue") +
+      geom_vline(xintercept = optimal_turb_param.k_min, color = "red", linetype = "dashed") +
+      labs(title = "Composite Score vs turb_param.k_min",
+           x = "turb_param.k_min",
+           y = "Composite Score")
+    
+    b_turb_param.k_min = ggplot(join_GOTM, aes(x = turb_param.k_min)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+      geom_vline(xintercept = optimal_turb_param.k_min, color = "red", linetype = "dashed") +
+      labs(title = "Density of turb_param.k_min for Low Composite Score",
+           x = "turb_param.k_min",
+           y = "Weighted Density")
+    
+    a_turb_param.k_min+b_turb_param.k_min
+    
+    print(optimal_turb_param.k_min)
+    
+  ##### FLake #####
+    
+    ## c_relax_C
+    # Extract the computed density data from ggplot
+    dens_data <- ggplot_build(
+      ggplot(join_FLake, aes(x = c_relax_C)) +
+        geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+    )$data[[1]]
+    
+    # Find wind speed where density is maximized
+    optimal_c_relax_C <- dens_data$x[which.max(dens_data$y)]
+    
+    
+    a_c_relax_C = ggplot(join_FLake, aes(x = c_relax_C, y = score)) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(method = "loess", color = "blue") +
+      geom_vline(xintercept = optimal_c_relax_C, color = "red", linetype = "dashed") +
+      labs(title = "Composite Score vs c_relax_C",
+           x = "c_relax_C",
+           y = "Composite Score")
+    
+    b_c_relax_C = ggplot(join_FLake, aes(x = c_relax_C)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+      geom_vline(xintercept = optimal_c_relax_C, color = "red", linetype = "dashed") +
+      labs(title = "Density of c_relax_C for Low Composite Score",
+           x = "c_relax_C",
+           y = "Weighted Density")
+    
+    a_c_relax_C+b_c_relax_C
+    
+    print(optimal_c_relax_C)
+
 ```
 
-We see that the best fitting parameter is independent of the quality metric used (RMSE, NSE or MAE). Subsequently, we will use this set of parameters in the following model. Since the parameters for wind speed (wind_speed) and shortwave radiation scaling (swr) are shared across all the models, the mean value of these from the best sets of parameters is calculated in the following code. The model specific parameters are printed below.
+These optimized parameters were implemented as initial parameters in a new configuration file (LakeEnsemblR_EERES_calibrated.yaml). Note that calibration can be more extensive using different calibration methods and reiterating the simulation and evaluation process. However this would exceed the scope of the project and may lead to overfitting. Nevertheless calibration can be complex problem since different equally valid methods may lead to different calibrated values (See Appendix). The rather simple calibration method shall suffice for the purpose of applying the LakeEnsembleR package in practise.
 
-```{r bestparams}
-# Initialize a list to store the mean values for each model
-mean_values <- list()
 
-# Initialize vectors to store wind_speed and swr values across all models
-all_wind_speed <- c()
-all_swr <- c()
-all_kW <- c()
 
-# Function to calculate mean values for a given model
-calculate_means <- function(model_name) {
-  # Extract dataframes for the model from each list
-  df_rmse <- best_p_rmse[[model_name]]
-  df_nse <- best_p_nse[[model_name]]
-  df_mae <- best_p_mae[[model_name]]
-
-  # Combine the dataframes
-  combined_df <- rbind(df_rmse, df_nse, df_mae)
-
-  # Calculate mean for the specified parameters
-  mean_wind_speed <- mean(combined_df$wind_speed, na.rm = TRUE)
-  mean_swr <- mean(combined_df$swr, na.rm = TRUE)
-  mean_Kw <- mean(combined_df$Kw, na.rm = TRUE)
-
-  # Check if the parameter exists in the combined dataframe before calculating mean
-  mean_a_seiche <- ifelse("a_seiche" %in% colnames(combined_df),
-                           mean(combined_df$a_seiche, na.rm = TRUE), NA)
-  mean_turb_param_k_min <- ifelse("turb_param.k_min" %in% colnames(combined_df),
-                                   mean(combined_df$turb_param.k_min, na.rm = TRUE), NA)
-  mean_c_relax_C <- ifelse("c_relax_C" %in% colnames(combined_df),
-                           mean(combined_df$c_relax_C, na.rm = TRUE), NA)
-
-  # Append wind_speed and swr values to the global vectors
-  all_wind_speed <<- c(all_wind_speed, combined_df$wind_speed)
-  all_swr <<- c(all_swr, combined_df$swr)
-  all_Kw <<- c(all_kW, combined_df$Kw)
-
-  # Return the means as a named vector
-  return(c(mean_wind_speed, mean_swr, mean_Kw, mean_a_seiche, mean_turb_param_k_min, mean_c_relax_C))
-}
-
-# Calculate means for each model
-mean_values$FLake <- calculate_means("FLake")
-mean_values$GOTM <- calculate_means("GOTM")
-mean_values$Simstrat <- calculate_means("Simstrat")
-
-# Convert the list to a dataframe for better visualization
-mean_values_df <- do.call(rbind, mean_values)
-colnames(mean_values_df) <- c("mean_wind_speed", "mean_swr", "mean_Kw", "mean_a_seiche", "mean_turb_param.k_min", "mean_c_relax_C")
-
-# Calculate overall mean for wind_speed and swr across all models
-overall_mean_wind_speed <- mean(all_wind_speed, na.rm = TRUE)
-overall_mean_swr <- mean(all_swr, na.rm = TRUE)
-overall_mean_Kw <- mean(all_Kw, na.rm=TRUE)
-
-# Print the mean values for each model
-cat("Parameter combination with best fit: \n")
-print(mean_values_df)
-
-# Print the overall mean values
-cat("Overall mean wind_speed across all models:", overall_mean_wind_speed, "\n")
-cat("Overall mean swr across all models:", overall_mean_swr, "\n")
-cat("Overall mean Kw across all models:", overall_mean_Kw)
-```
-
-These parameters were implemented as initial parameters in a new configuration file (LakeEnsemblR_EERES_bestparams.yaml).
-
-## Extending the calibration range
-
-Now we expand the range of possible values since some of the best parameter sets have values close to the upper or lower bounds.
-
-```{r, results='hide'}
-config_file = "LakeEnsemblR_EERES_bestparams.yaml"
-model = c("FLake","GOTM","Simstrat")
-cali_res_GOTM_Simstrat_expanded <- cali_ensemble(config_file = config_file, num = 500, 
-                                                 cmethod = "LHC", parallel = FALSE, 
-                                                 model = c("GOTM","Simstrat"), 
-                                                 ncores = 2)
-cali_res_FLake_expanded <- cali_ensemble(config_file = config_file, num = 1,
-                                         cmethod = "LHC", parallel = FALSE,
-                                         model = "FLake")
-
-plot_Simstrat = plot_LHC(config_file = config_file, 
-         model = "Simstrat", 
-         res_files = cali_res_GOTM_Simstrat_expanded$Simstrat,
-         qual_met = "nse", best = "high")
-plot_GOTM = plot_LHC(config_file = config_file, 
-         model = "GOTM", 
-         res_files = cali_res_GOTM_Simstrat_expanded$GOTM,
-         qual_met = "nse", best = "high")
-plot_FLake = plot_LHC(config_file = config_file, 
-                      res_files = cali_res_FLake_expanded$FLake, 
-                      model="FLake",
-                      qual_met = "nse", best="high")
-
-cali_res_all = list(cali_res_FLake,cali_res_GOTM,cali_res_Simstrat)
-res_LHC_all <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res_all))
-
-# Use res_LHC to investigate the results of the calibration
-
-# get the best parameter set for each model using rmse
-best_p_rmse <- setNames(lapply(model, function(m)res_LHC_all[[m]][which.min(res_LHC_all[[m]]$rmse), ]), model)
-best_p_nse <- setNames(lapply(model, function(m)res_LHC_all[[m]][which.max(res_LHC_all[[m]]$nse), ]), model)
-best_p_mae <- setNames(lapply(model, function(m)res_LHC_all[[m]][which.min(res_LHC_all[[m]]$mae), ]), model)
-```
 
 ## Model Run with best parameters
 
@@ -617,6 +762,911 @@ ggplot(out_df, aes(x = date, y = temp, color = model)) +
 
 ```
 >>>>>>> 57b123ab197072dcc6eb57472d486dd1525279fa
+
+
+## Calibration different methods
+```{r}
+
+params_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_Simstrat_LHC_n500.csv")
+em_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/Simstrat_LHC_n500.csv")
+
+params_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_GOTM_LHC_n500.csv")
+em_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/GOTM_LHC_n500.csv")
+
+params_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_FLake_LHC_n100.csv")
+em_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/FLake_LHC_n100.csv")
+
+join_Sim = full_join(params_Sim, em_Sim, by = "par_id")
+join_GOTM = full_join(params_GOTM, em_GOTM, by = "par_id")
+join_FLake = full_join(params_FLake, em_FLake, by = "par_id")
+
+
+## Merge data sets for calibration of shared parameters
+Sim_red = join_Sim %>% select(-a_seiche, -par_id)
+GOTM_red = join_GOTM %>% select(-turb_param.k_min, -par_id)
+FLake_red = join_FLake %>% select(-c_relax_C, -par_id)
+
+shared = rbind(Sim_red, GOTM_red, FLake_red)
+
+
+
+#### Calculate composite error metric score ####
+
+  ## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+  w1 = 1/sd(join_Sim$rmse) # RMSE
+  w2 = 1/sd((1-join_Sim$nse)) # NSE
+  w3 = 1/sd(abs(join_Sim$bias)) # Bias
+  w4 = 1/sd(1- join_Sim$r) # R^2
+  
+  ## Compisite error metric
+  join_Sim$score = w1*join_Sim$rmse + w2*(1-join_Sim$nse) + w3*abs(join_Sim$bias) + w4*(1- join_Sim$r)
+
+  
+  ## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+  w5 = 1/sd(join_GOTM$rmse) # RMSE
+  w6 = 1/sd((1-join_GOTM$nse)) # NSE
+  w7 = 1/sd(abs(join_GOTM$bias)) # Bias
+  w8 = 1/sd(1- join_GOTM$r) # R^2
+  
+  ## Compisite error metric
+  join_GOTM$score = w5*join_GOTM$rmse + w6*(1-join_GOTM$nse) + w7*abs(join_GOTM$bias) + w8*(1- join_GOTM$r)
+  
+
+  ## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+  w9 = 1/sd(join_FLake$rmse) # RMSE
+  w10 = 1/sd((1-join_FLake$nse)) # NSE
+  w11 = 1/sd(abs(join_FLake$bias)) # Bias
+  w12 = 1/sd(1- join_FLake$r) # R^2
+  
+  ## Compisite error metric
+  join_FLake$score = w9*join_FLake$rmse + w10*(1-join_FLake$nse) + w11*abs(join_FLake$bias) + w12*(1- join_FLake$r)
+  
+  
+  ## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+  w13 = 1/sd(shared$rmse) # RMSE
+  w14 = 1/sd((1-shared$nse)) # NSE
+  w15 = 1/sd(abs(shared$bias)) # Bias
+  w16 = 1/sd(1- shared$r) # R^2
+  
+  ## Compisite error metric
+  shared$score = w13*shared$rmse + w14*(1-shared$nse) + w15*abs(shared$bias) + w16*(1- shared$r)
+  
+  
+  
+ 
+#### Simstrat ####
+##### Visual assessment #####
+
+  ## Wind speed
+
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_Sim, aes(x = wind_speed)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  
+  
+  a_ws = ggplot(join_Sim, aes(x = wind_speed, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Wind Speed",
+         x = "Wind Speed",
+         y = "Composite Score")
+  
+  b_ws = ggplot(join_Sim, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Density of Wind Speed for Low Composite Score",
+         x = "Wind Speed",
+         y = "Weighted Density")
+  
+  a_ws+b_ws
+  
+  ## Optimal wind speed
+  print(optimal_wind_speed)
+  
+  
+  ## SWR
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_Sim, aes(x = swr)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_swr <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_swr = ggplot(join_Sim, aes(x = swr, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs swr",
+         x = "swr",
+         y = "Composite Score")
+  
+  b_swr = ggplot(join_Sim, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Density of swr for Low Composite Score",
+         x = "swr",
+         y = "Weighted Density")
+  
+  a_swr+b_swr
+  
+  print(optimal_swr)
+  
+  ## Kw
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_Sim, aes(x = Kw)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_Kw = ggplot(join_Sim, aes(x = Kw, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Kw",
+         x = "Kw",
+         y = "Composite Score")
+  
+  b_Kw = ggplot(join_Sim, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Density of Kw for Low Composite Score",
+         x = "Kw",
+         y = "Weighted Density")
+  
+  a_Kw+b_Kw
+  
+  print(optimal_Kw)
+  
+  ## a_seiche
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_Sim, aes(x = a_seiche)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_a_seiche <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_a_seiche = ggplot(join_Sim, aes(x = a_seiche, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_a_seiche, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs a_seiche",
+         x = "a_seiche",
+         y = "Composite Score")
+  
+  b_a_seiche = ggplot(join_Sim, aes(x = a_seiche)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_a_seiche, color = "red", linetype = "dashed") +
+    labs(title = "Density of a_seiche for Low Composite Score",
+         x = "a_seiche",
+         y = "Weighted Density")
+  
+  a_a_seiche+b_a_seiche
+  
+  print(optimal_a_seiche)
+  
+  
+  ##### Random Forest predictions #####
+  ## Use a random forest model to predict the best set of parameters (using brute force grid search) 
+  rf_model <- randomForest(score ~ wind_speed + swr + Kw + a_seiche, 
+                           data = join_Sim, 
+                           ntree = 500, importance = TRUE)
+  
+  print(rf_model) # ~82% of variance explained
+  
+  
+  importance(rf_model)  
+  varImpPlot(rf_model)  # Plot variable importance
+  
+  
+  # Define ranges of parameters
+  wind_range <- seq(min(join_Sim$wind_speed), max(join_Sim$wind_speed), length.out = 50)
+  swr_range <- seq(min(join_Sim$swr), max(join_Sim$swr), length.out = 50)
+  Kw_range <- seq(min(join_Sim$Kw), max(join_Sim$Kw), length.out = 50)
+  a_seiche_range <- seq(min(join_Sim$a_seiche), max(join_Sim$a_seiche), length.out = 50)
+  
+  # Create all combinations
+  param_grid <- expand.grid(wind_speed = wind_range, swr = swr_range, Kw = Kw_range, a_seiche = a_seiche_range)
+  
+  # Predict scores
+  param_grid$predicted_score <- predict(rf_model, newdata = param_grid)
+  
+  # Determine the 10% quantile threshold
+  quantile_10 <- quantile(param_grid$predicted_score, probs = 0.0001)
+  
+  # Filter the dataset for the lowest 10% of predicted_score values
+  filtered_data <- param_grid[param_grid$predicted_score <= quantile_10, ]
+  
+  # Calculate the mean for each parameter in the filtered data
+  mean_values <- colMeans(filtered_data[, c("wind_speed", "swr", "Kw", "a_seiche")])
+  
+  
+  # Print the results
+  print(mean_values)
+  
+  
+
+  
+
+  ##### Rank #####
+  ## Ranking parameters sets on composite error score and describing parameter ranges of best sets
+  
+  ## Finding optimal parameters by ranking parameter sets by composite error score
+  join_Sim$rank <- rank(join_Sim$score)
+  
+  # Select the best 20% of models
+  best_params_rank <- join_Sim[join_Sim$rank <= quantile(join_Sim$rank, 0.1), ]
+  
+  # Summarize the best parameter ranges
+  #summary(best_params_rank[, c("wind_speed", "swr", "Kw", "a_seiche")])
+  rank = sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "a_seiche")]), mean)
+  
+  
+  #### Comparing results
+  density_Simstrat = c(optimal_wind_speed, optimal_swr, optimal_Kw, optimal_a_seiche, "Optimal density")
+  rf_Simstrat = c(mean_values, "Random Forest")
+  rank_Simstrat = c(rank, "Rank")  
+  
+  comparison_Simstrat = rbind(density_Simstrat, rf_Simstrat, rank_Simstrat)
+  comparison_Simstrat = as.data.frame(comparison_Simstrat)
+  names(comparison_Simstrat) = c("wind_speed", "swr", "Kw", "a_seiche", "Calibration method")
+  
+  
+  
+  
+  
+#### GOTM ####
+  ##### Visual assessment #####
+  
+  ## Wind speed
+  
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_GOTM, aes(x = wind_speed)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  
+  
+  a_ws = ggplot(join_GOTM, aes(x = wind_speed, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Wind Speed",
+         x = "Wind Speed",
+         y = "Composite Score")
+  
+  b_ws = ggplot(join_GOTM, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Density of Wind Speed for Low Composite Score",
+         x = "Wind Speed",
+         y = "Weighted Density")
+  
+  a_ws+b_ws
+  
+  ## Optimal wind speed
+  print(optimal_wind_speed)
+  
+  
+  ## SWR
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_GOTM, aes(x = swr)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_swr <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_swr = ggplot(join_GOTM, aes(x = swr, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs swr",
+         x = "swr",
+         y = "Composite Score")
+  
+  b_swr = ggplot(join_GOTM, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Density of swr for Low Composite Score",
+         x = "swr",
+         y = "Weighted Density")
+  
+  a_swr+b_swr
+  
+  print(optimal_swr)
+  
+  ## Kw
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_GOTM, aes(x = Kw)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_Kw = ggplot(join_GOTM, aes(x = Kw, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Kw",
+         x = "Kw",
+         y = "Composite Score")
+  
+  b_Kw = ggplot(join_GOTM, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Density of Kw for Low Composite Score",
+         x = "Kw",
+         y = "Weighted Density")
+  
+  a_Kw+b_Kw
+  
+  print(optimal_Kw)
+  
+  ## turb_param.k_min
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_GOTM, aes(x = turb_param.k_min)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_turb_param.k_min <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_turb_param.k_min = ggplot(join_GOTM, aes(x = turb_param.k_min, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_turb_param.k_min, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs turb_param.k_min",
+         x = "turb_param.k_min",
+         y = "Composite Score")
+  
+  b_turb_param.k_min = ggplot(join_GOTM, aes(x = turb_param.k_min)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_turb_param.k_min, color = "red", linetype = "dashed") +
+    labs(title = "Density of turb_param.k_min for Low Composite Score",
+         x = "turb_param.k_min",
+         y = "Weighted Density")
+  
+  a_turb_param.k_min+b_turb_param.k_min
+  
+  print(optimal_turb_param.k_min)
+  
+  
+  ##### Random Forest predictions #####
+  ## Use a random forest model to predict the best set of parameters (using brute force grid search) 
+  rf_model <- randomForest(score ~ wind_speed + swr + Kw + turb_param.k_min, 
+                           data = join_GOTM, 
+                           ntree = 500, importance = TRUE)
+  
+  print(rf_model) # ~48% of variance explained
+
+  importance(rf_model)  
+  varImpPlot(rf_model)  # Plot variable importance
+  
+  
+  # Define ranges of parameters
+  wind_range <- seq(min(join_GOTM$wind_speed), max(join_GOTM$wind_speed), length.out = 50)
+  swr_range <- seq(min(join_GOTM$swr), max(join_GOTM$swr), length.out = 50)
+  Kw_range <- seq(min(join_GOTM$Kw), max(join_GOTM$Kw), length.out = 50)
+  turb_param.k_min_range <- seq(min(join_GOTM$turb_param.k_min), max(join_GOTM$turb_param.k_min), length.out = 50)
+  
+  # Create all combinations
+  param_grid <- expand.grid(wind_speed = wind_range, swr = swr_range, Kw = Kw_range, turb_param.k_min = turb_param.k_min_range)
+  
+  # Predict scores
+  param_grid$predicted_score <- predict(rf_model, newdata = param_grid)
+  
+  # Determine the 0.01% quantile threshold
+  quantile_10 <- quantile(param_grid$predicted_score, probs = 0.0001)
+  
+  # Filter the dataset for the lowest 10% of predicted_score values
+  filtered_data <- param_grid[param_grid$predicted_score <= quantile_10, ]
+  
+  # Calculate the mean for each parameter in the filtered data
+  mean_values <- colMeans(filtered_data[, c("wind_speed", "swr", "Kw", "turb_param.k_min")])
+  
+  # Print the results
+  print(mean_values)
+  
+  
+  
+  
+  
+  ##### Rank #####
+  ## Ranking parameters sets on composite error score and describing parameter ranges of best sets
+  
+  ## Finding optimal parameters by ranking parameter sets by composite error score
+  join_GOTM$rank <- rank(join_GOTM$score)
+  
+  # Select the best 20% of models
+  best_params_rank <- join_GOTM[join_GOTM$rank <= quantile(join_GOTM$rank, 0.1), ]
+  
+  # Summarize the best parameter ranges
+  #summary(best_params_rank[, c("wind_speed", "swr", "Kw", "turb_param.k_min")])
+  rank = sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "turb_param.k_min")]), mean)
+  
+  
+  #### Comparing results
+  density_GOTM = c(optimal_wind_speed, optimal_swr, optimal_Kw, optimal_turb_param.k_min, "Optimal density")
+  rf_GOTM = c(mean_values, "Random Forest")
+  rank_GOTM = c(rank, "Rank")  
+  
+  comparison_GOTM = rbind(density_GOTM, rf_GOTM, rank_GOTM)
+  comparison_GOTM = as.data.frame(comparison_GOTM)
+  names(comparison_GOTM) = c("wind_speed", "swr", "Kw", "turb_param.k_min", "Calibration method")
+  
+  
+  
+  
+  
+  
+  
+  
+#### FLake ####
+  ##### Visual assessment #####
+  
+  ## Wind speed
+  
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_FLake, aes(x = wind_speed)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  
+  
+  a_ws = ggplot(join_FLake, aes(x = wind_speed, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Wind Speed",
+         x = "Wind Speed",
+         y = "Composite Score")
+  
+  b_ws = ggplot(join_FLake, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Density of Wind Speed for Low Composite Score",
+         x = "Wind Speed",
+         y = "Weighted Density")
+  
+  a_ws+b_ws
+  
+  ## Optimal wind speed
+  print(optimal_wind_speed)
+  
+  
+  ## SWR
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_FLake, aes(x = swr)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_swr <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_swr = ggplot(join_FLake, aes(x = swr, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs swr",
+         x = "swr",
+         y = "Composite Score")
+  
+  b_swr = ggplot(join_FLake, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Density of swr for Low Composite Score",
+         x = "swr",
+         y = "Weighted Density")
+  
+  a_swr+b_swr
+  
+  print(optimal_swr)
+  
+  ## Kw
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_FLake, aes(x = Kw)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_Kw = ggplot(join_FLake, aes(x = Kw, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Kw",
+         x = "Kw",
+         y = "Composite Score")
+  
+  b_Kw = ggplot(join_FLake, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Density of Kw for Low Composite Score",
+         x = "Kw",
+         y = "Weighted Density")
+  
+  a_Kw+b_Kw
+  
+  print(optimal_Kw)
+  
+  ## c_relax_C
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_FLake, aes(x = c_relax_C)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_c_relax_C <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_c_relax_C = ggplot(join_FLake, aes(x = c_relax_C, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_c_relax_C, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs c_relax_C",
+         x = "c_relax_C",
+         y = "Composite Score")
+  
+  b_c_relax_C = ggplot(join_FLake, aes(x = c_relax_C)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_c_relax_C, color = "red", linetype = "dashed") +
+    labs(title = "Density of c_relax_C for Low Composite Score",
+         x = "c_relax_C",
+         y = "Weighted Density")
+  
+  a_c_relax_C+b_c_relax_C
+  
+  print(optimal_c_relax_C)
+  
+  
+  ##### Random Forest predictions #####
+  ## Use a random forest model to predict the best set of parameters (using brute force grid search) 
+  rf_model <- randomForest(score ~ wind_speed + swr + Kw + c_relax_C, 
+                           data = join_FLake, 
+                           ntree = 500, importance = TRUE)
+  
+  importance(rf_model)  
+  varImpPlot(rf_model)  # Plot variable importance
+  
+  print(rf_model) # ~80% of variance explained
+  
+  # Define ranges of parameters
+  wind_range <- seq(min(join_FLake$wind_speed), max(join_FLake$wind_speed), length.out = 50)
+  swr_range <- seq(min(join_FLake$swr), max(join_FLake$swr), length.out = 50)
+  Kw_range <- seq(min(join_FLake$Kw), max(join_FLake$Kw), length.out = 50)
+  c_relax_C_range <- seq(min(join_FLake$c_relax_C), max(join_FLake$c_relax_C), length.out = 50)
+  
+  # Create all combinations
+  param_grid <- expand.grid(wind_speed = wind_range, swr = swr_range, Kw = Kw_range, c_relax_C = c_relax_C_range)
+  
+  # Predict scores
+  param_grid$predicted_score <- predict(rf_model, newdata = param_grid)
+  
+  # Determine the 0.01% quantile threshold
+  quantile_10 <- quantile(param_grid$predicted_score, probs = 0.0001)
+  
+  # Filter the dataset for the lowest 10% of predicted_score values
+  filtered_data <- param_grid[param_grid$predicted_score <= quantile_10, ]
+  
+  # Calculate the mean for each parameter in the filtered data
+  mean_values <- colMeans(filtered_data[, c("wind_speed", "swr", "Kw", "c_relax_C")])
+  
+  # Print the results
+  print(mean_values)
+  
+  
+  
+  
+  
+  ##### Rank #####
+  ## Ranking parameters sets on composite error score and describing parameter ranges of best sets
+  
+  ## Finding optimal parameters by ranking parameter sets by composite error score
+  join_FLake$rank <- rank(join_FLake$score)
+  
+  # Select the best 20% of models
+  best_params_rank <- join_FLake[join_FLake$rank <= quantile(join_FLake$rank, 0.1), ]
+  
+  # Summarize the best parameter ranges
+  #summary(best_params_rank[, c("wind_speed", "swr", "Kw", "c_relax_C")])
+  rank = sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "c_relax_C")]), mean)
+  
+  
+  #### Comparing results
+  density_FLake = c(optimal_wind_speed, optimal_swr, optimal_Kw, optimal_c_relax_C, "Optimal density")
+  rf_FLake = c(mean_values, "Random Forest")
+  rank_FLake = c(rank, "Rank")  
+  
+  comparison_FLake = rbind(density_FLake, rf_FLake, rank_FLake)
+  comparison_FLake = as.data.frame(comparison_FLake)
+  names(comparison_FLake) = c("wind_speed", "swr", "Kw", "c_relax_C", "Calibration method")
+  
+  
+  
+#### Shared parameters ####
+  ##### Visual assessment #####
+  
+  ## Wind speed
+  
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(shared, aes(x = wind_speed)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  
+  
+  a_ws = ggplot(shared, aes(x = wind_speed, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Wind Speed",
+         x = "Wind Speed",
+         y = "Composite Score")
+  
+  b_ws = ggplot(shared, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Density of Wind Speed for Low Composite Score",
+         x = "Wind Speed",
+         y = "Weighted Density")
+  
+  a_ws+b_ws
+  
+  ## Optimal wind speed
+  print(optimal_wind_speed)
+  
+  
+  ## SWR
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(shared, aes(x = swr)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_swr <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_swr = ggplot(shared, aes(x = swr, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs swr",
+         x = "swr",
+         y = "Composite Score")
+  
+  b_swr = ggplot(shared, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Density of swr for Low Composite Score",
+         x = "swr",
+         y = "Weighted Density")
+  
+  a_swr+b_swr
+  
+  print(optimal_swr)
+  
+  ## Kw
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(shared, aes(x = Kw)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_Kw = ggplot(shared, aes(x = Kw, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Kw",
+         x = "Kw",
+         y = "Composite Score")
+  
+  b_Kw = ggplot(shared, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Density of Kw for Low Composite Score",
+         x = "Kw",
+         y = "Weighted Density")
+  
+  a_Kw+b_Kw
+  
+  print(optimal_Kw)
+  
+ 
+  
+  
+  ##### Random Forest predictions #####
+  ## Use a random forest model to predict the best set of parameters (using brute force grid search) 
+  rf_model <- randomForest(score ~ wind_speed + swr + Kw, 
+                           data = shared, 
+                           ntree = 500, importance = TRUE)
+  
+  importance(rf_model)  
+  varImpPlot(rf_model)  # Plot variable importance
+  
+  print(rf_model) # ~57% of variance explained
+  
+  # Define ranges of parameters
+  wind_range <- seq(min(shared$wind_speed), max(shared$wind_speed), length.out = 50)
+  swr_range <- seq(min(shared$swr), max(shared$swr), length.out = 50)
+  Kw_range <- seq(min(shared$Kw), max(shared$Kw), length.out = 50)
+
+  # Create all combinations
+  param_grid <- expand.grid(wind_speed = wind_range, swr = swr_range, Kw = Kw_range)
+  
+  # Predict scores
+  param_grid$predicted_score <- predict(rf_model, newdata = param_grid)
+  
+  # Determine the 0.1% quantile threshold
+  quantile_10 <- quantile(param_grid$predicted_score, probs = 0.001)
+  
+  # Filter the dataset for the lowest 10% of predicted_score values
+  filtered_data <- param_grid[param_grid$predicted_score <= quantile_10, ]
+  
+  # Calculate the mean for each parameter in the filtered data
+  mean_values <- colMeans(filtered_data[, c("wind_speed", "swr", "Kw")])
+  
+  # Print the results
+  print(mean_values)
+  
+  
+  
+  
+  
+  ##### Rank #####
+  ## Ranking parameters sets on composite error score and describing parameter ranges of best sets
+  
+  ## Finding optimal parameters by ranking parameter sets by composite error score
+  shared$rank <- rank(shared$score)
+  
+  # Select the best 20% of models
+  best_params_rank <- shared[shared$rank <= quantile(shared$rank, 0.1), ]
+  
+  # Summarize the best parameter ranges
+  #summary(best_params_rank[, c("wind_speed", "swr", "Kw", "c_relax_C")])
+  rank = sapply((best_params_rank[, c("wind_speed", "swr", "Kw")]), mean)
+  
+  
+  #### Comparing results
+  density_shared = c(optimal_wind_speed, optimal_swr, optimal_Kw, "Optimal density")
+  rf_shared = c(mean_values, "Random Forest")
+  rank_shared = c(rank, "Rank")  
+  
+  comparison_shared = rbind(density_shared, rf_shared, rank_shared)
+  comparison_shared = as.data.frame(comparison_shared)
+  names(comparison_shared) = c("wind_speed", "swr", "Kw", "Calibration method")
+  
+  
+  #### Visualisation ####
+  rf_Simstrat = as.numeric(rf_Simstrat[-c(5)])
+  rf_GOTM = as.numeric(rf_GOTM[-c(5)])
+  rf_FLake = as.numeric(rf_Simstrat[-c(5)])
+  rf_shared = as.numeric(rf_shared[-c(4)])
+  
+  rank_Simstrat = as.numeric(rank_Simstrat[-c(5)])
+  rank_GOTM = as.numeric(rank_GOTM[-c(5)])
+  rank_FLake = as.numeric(rank_Simstrat[-c(5)])
+  rank_shared = as.numeric(rank_shared[-c(4)])
+  
+  overview <- data.frame(
+    
+    value =   as.numeric(c(density_Simstrat[-c(5)], density_GOTM[-c(5)], density_FLake[-c(5)], density_shared[-c(4)],
+                rf_Simstrat, rf_GOTM, rf_FLake, rf_shared,
+                rank_Simstrat, rank_GOTM, rank_FLake, rank_shared)),
+  
+    parameter = c("wind_speed", "swr", "Kw", "a_seiche",
+                  "wind_speed", "swr", "Kw", "turb_param.k_min",
+                  "wind_speed", "swr", "Kw", "c_relax_C",
+                  "wind_speed", "swr", "Kw",
+                  "wind_speed", "swr", "Kw", "a_seiche",
+                  "wind_speed", "swr", "Kw", "turb_param.k_min",
+                  "wind_speed", "swr", "Kw", "c_relax_C",
+                  "wind_speed", "swr", "Kw",
+                  "wind_speed", "swr", "Kw", "a_seiche",
+                  "wind_speed", "swr", "Kw", "turb_param.k_min",
+                  "wind_speed", "swr", "Kw", "c_relax_C",
+                  "wind_speed", "swr", "Kw"),
+  
+    model = c(rep("Simstrat", 4), rep("GOTM", 4), rep("FLake", 4), rep("Shared", 3),
+              rep("Simstrat", 4), rep("GOTM", 4), rep("FLake", 4), rep("Shared", 3),
+              rep("Simstrat", 4), rep("GOTM", 4), rep("FLake", 4), rep("Shared", 3)),
+    calibration_method = c(rep("Optimal density", 15), rep("Random Forest", 15), rep("Rank", 15)),
+    stringsAsFactors = FALSE
+  )
+  
+  
+ 
+  ## parameter values per model and calibration method
+  
+    ## Shared parameters
+    ggplot(overview[overview$parameter %in% c("Kw", "swr", "wind_speed"),], aes(x = model, y = value, fill = calibration_method)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      facet_wrap(~ parameter, scales = "free_y") +  # One plot per parameter
+      labs(title = "Parameter Values by Model and Calibration Method",
+           x = "Model",
+           y = "Value") +
+      theme_minimal()
+  
+    ## Unique parameters
+    ggplot(overview[overview$parameter %in% c("a_seiche", "turb_param.k_min", "c_relax_C"),], aes(x = model, y = value, fill = calibration_method)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      facet_wrap(~ parameter, scales = "free_y") +  # One plot per parameter
+      labs(title = "Parameter Values by Model and Calibration Method",
+           x = "Model",
+           y = "Value") +
+      theme_minimal()
+    
+    
+  ## Distribution of parameter values
+    
+    ## Shared
+    ggplot(overview[overview$parameter %in% c("Kw", "swr", "wind_speed"),], aes(x = parameter, y = value)) +
+      geom_boxplot() + geom_jitter() +
+      labs(title = "Distribution of Parameter Values Across Calibration Methods",
+           x = "Parameter",
+           y = "Value") +
+      theme_minimal()
+  
+    ## Unique
+    ggplot(overview[overview$parameter %in% c("a_seiche", "turb_param.k_min", "c_relax_C"),], aes(x = parameter, y = value)) +
+      geom_boxplot() + geom_jitter() +
+    labs(title = "Distribution of Parameter Values Across Calibration Methods",
+         x = "Parameter",
+         y = "Value") +
+      theme_minimal()
+    
+    
+```
 
 ## Single model runs
 
