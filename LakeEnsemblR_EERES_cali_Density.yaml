@@ -47,7 +47,7 @@ output:
    file: ensemble_output                        # name of output file, excluding extension
    format: netcdf                               # format [text/netcdf]
    depths: 0.05                                 # depths to extract output [m]
-   compression: 1                               # set to an integer between 1 (least compression) and 9 (most compression), this enables compression for the variable as it is written to the file
+   compression: 4                               # set to an integer between 1 (least compression) and 9 (most compression), this enables compression for the variable as it is written to the file
    max_members: 25                              # maximum number of members of the same model that can be added to the netcdf
    time_unit: hour                            # time unit [second, hour, day]
    time_step: 1                               # number of time units between output [min=1]
@@ -67,8 +67,8 @@ scaling_factors:                                # scaling factors to apply to me
       wind_speed: 1.0
 model_parameters:
    FLake:                                       # FLake specific parameters
-      fetch_lk: 10.0                            # typical wind fetch [m]
-      depth_w_lk: 0.301                           # fixed mean depth of the lake [m]
+      fetch_lk: 15.0                          # typical wind fetch [m]
+      depth_w_lk: 0.31
    GLM:                                         # GLM specific parameters
       bsn_len: 11                               # length of the lake basin, at crest height [m]
       bsn_wid: 4.5                              # width of the lake basin, at crest height [m]
@@ -80,57 +80,47 @@ model_parameters:
 calibration:                                    # calibration section
    met:                                         # meteo scaling parameter
       wind_speed:                               # wind speed scaling
-         lower: 0.5
-         upper: 2
-         initial: 1
-         log: false
+         lower: 0.01                             # lower bound for wind speed scaling
+         upper: 10                               # upper bound for wind speed scaling
+         initial: 7.162075969               # initial value for wind speed scaling
+         log: false                             # log transform scaling factor
       swr:                                      # shortwave radiation scaling
-         lower: 0.5
-         upper: 1.5
-         initial: 1
-         log: false
-   Kw:                                        # initial value for wind speed scaling
-      lower: 0.5
-      upper: 1.5
-      initial: 0.98
-      log: false
+         lower: 0.01                             # lower bound for shortwave radiation scaling
+         upper: 10                             # upper bound for shortwave radiation scaling
+         initial: 1.520317753              # initial value for shortwave radiation scaling
+         log: false                             # log transform scaling factor
+   Kw:
+      lower: 0.01                              # lower bound for wind speed scaling
+      upper: 10                                # upper bound for wind speed scaling
+      initial: 1.528997890                # initial value for wind speed scaling
+      log: false                                # log transform scaling factor
    FLake:                                       # FLake specific parameters
       c_relax_C:
-         lower: 0.00000001
-         upper: 0.01
-         initial: 0.0030
-         log: false
-      depth_bs_lk:                            # Depth of the thermally active layer of the bottom sediments [m]
-         lower: 0
-         upper: 5
-         initial: 1
-         log: false
-      T_bs_lk:                                # Temperature at the outer edge of the thermally active layer of the bottom sediments [C]
-        lower: 0
-        upper: 10
-        initial: 4
-        log: false
-   GLM:                                  # GLM specific parameters
+         lower: 0.0001                          # lower bound for parameter
+         upper: 0.01                            # upper bound for parameter
+         initial: 0.0022913                        # initial value for parameter
+         log: false                             # log transform scaling factor
+   GLM:                                         # GLM specific parameters
       mixing/coef_mix_hyp:
-         lower: 0.001
-         upper: 1
-         initial: 0.5
-         log: false
-   GOTM:                                 # GOTM specific parameters
+         lower: 0.01                             # lower bound for parameter
+         upper: 10                               # upper bound for parameter
+         initial: 0.5                             # initial value for parameter
+         log: false                             # log transform scaling factor
+   GOTM:                                        # GOTM specific parameters
       turb_param/k_min:
-         lower: 5E-10
-         upper: 5E-2
-         initial: 1E-5
+         lower: 5E-10                            # lower bound for parameter
+         upper: 5E-1                            # upper bound for parameter
+         initial: 3.192033E-5                          # initial value for parameter
          log: true
-   Simstrat:                             # Simstrat specific parameters
+   Simstrat:                                    # Simstrat specific parameters
       a_seiche:
-         lower: 0.000001
-         upper: 0.01
-         initial: 0.001
-         log: false
-   MyLake:                               # MyLake specific parameters
+         lower: 0.00001                          # lower bound for parameter
+         upper: 0.01                           # upper bound for parameter
+         initial: 0.0016984                         # initial value for parameter
+         log: false                             # log transform scaling factor
+   MyLake:                                      # MyLake specific parameters
       Phys.par/C_shelter:
-         lower: 0.14
-         upper: 0.16
-         initial: 0.15
-         log: false
+         lower: 0.01                            # lower bound for parameter
+         upper: 0.5                           # upper bound for parameter
+         initial: 0.15                          # initial value for parameter
+         log: false                             # log transform scaling factor

@@ -20,7 +20,7 @@ Sys.setenv("R_REMOTES_NO_ERRORS_FROM_WARNINGS" = "true")
 # remotes::install_github("aemon-j/gotmtools")
 # remotes::install_github("aemon-j/SimstratR")
 # remotes::install_github("aemon-j/MyLakeR")
-remotes::install_github("aemon-j/LakeEnsemblR")
+# remotes::install_github("aemon-j/LakeEnsemblR")
 # install.packages("C:/Users/morit/Documents/LakeEnsemblR", repos = NULL, type="source")
 library(readr)
 library(lubridate)
@@ -33,6 +33,7 @@ library(data.table)
 library(ggplot2)
 library(gotmtools)
 library(LakeEnsemblR)
+setwd("Documents/ACP5_PondModel")
 ```
 
 # Task
@@ -43,7 +44,7 @@ Note: When answering the above-mentioned research questions, the focus should be
 
 Portfolio: Description of methods, results and a (short) discussion. The important thing is the complete documentation of the conducted model simulations.
 
-## Data Preparation
+# Preparation
 
 The required format of data for the LakeEnsemblR model environment are csv tables containing the pond hypsograph, the Water Temperature Profile of the pond and the meteorological data. These files are prepared using the following code from the given datasets.
 
@@ -177,6 +178,880 @@ all(meteo_filled$time_group == complete_time_series)
 write.table(meteo_filled, file = "LakeEnsemblR_meteo_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
 ```
 
+
+# Modelling
+
+## Ensemble model run
+
+Following Code runs the LER model. There are issues using GLM and MyLake in shallow ponds, therefore all following simulations are done using exclusively FLake, GOTM or Simstrat. We found that the model FLake calculates a mean depth of the lake from the volume (calculated from truncated square pyramids between the layers) and the surface area. This however seems to reduce the depth of shallow ponds below the depths of observed layers. 
+
+Therefore we employ a function `cali_ensemble2` that hardcodes the mean_depth of 0.3 m.
+
+```{r export_location, results = 'hide', include=FALSE}
+r <- unclass(lsf.str(envir = asNamespace("LakeEnsemblR"), all = T))
+# create functions in the Global Env. with the same name
+for(name in r) eval(parse(text=paste0(name, '<-LakeEnsemblR:::', name)))
+export_location2 = function (config_file, model = c("GOTM", "GLM", "Simstrat", "FLake", 
+                                 "MyLake"), folder = ".") 
+{
+  oldwd <- getwd()
+  setwd(folder)
+  on.exit({
+    setwd(oldwd)
+  })
+  model <- check_models(model)
+  lat <- get_yaml_value(config_file, "location", "latitude")
+  lon <- get_yaml_value(config_file, "location", "longitude")
+  elev <- get_yaml_value(config_file, "location", "elevation")
+  max_depth <- get_yaml_value(config_file, "location", "depth")
+  init_depth <- get_yaml_value(config_file, "location", "init_depth")
+  hyp_file <- get_yaml_value(config_file, "location", "hypsograph")
+  if (!file.exists(hyp_file)) {
+    stop(hyp_file, " does not exist. Check filepath in ", 
+         config_file)
+  }
+  hyp <- read.csv(hyp_file)
+  use_ice <- get_yaml_value(config_file, "ice", "use")
+  output_depths <- get_yaml_value(config_file, "output", "depths")
+  if ("FLake" %in% model) {
+    browser()
+    fla_fil <- file.path(folder, get_yaml_value(config_file, 
+                                                "config_files", "FLake"))
+    bth_area <- hyp$Area_meterSquared
+    bth_depth <- hyp$Depth_meter
+    top <- min(bth_depth)
+    bottom <- max(bth_depth)
+    layer_d <- seq(top, bottom, 0.1)
+    layer_a <- stats::approx(bth_depth, bth_area, layer_d)$y
+    if (init_depth < max_depth) {
+      layer_a <- layer_a[(init_depth + (layer_d - max_depth)) >= 
+                           0]
+      layer_d <- layer_d[(init_depth + (layer_d - max_depth)) >= 
+                           0]
+      layer_d <- layer_d - min(layer_d)
+    }
+    vols <- c()
+    for (i in 2:length(layer_d)) {
+      h <- layer_d[i] - layer_d[i - 1]
+      cal_v <- (h/3) * (layer_a[i] + layer_a[i - 1] + sqrt(layer_a[i] * 
+                                                             layer_a[i - 1]))
+      vols <- c(vols, cal_v)
+    }
+    vol <- sum(vols)
+    # mean_depth <- signif((vol/layer_a[1]), 4)
+    mean_depth <- 0.3
+    input_nml(fla_fil, label = "SIMULATION_PARAMS", key = "h_ML_in", 
+              mean_depth)
+    input_nml(fla_fil, label = "LAKE_PARAMS", key = "depth_w_lk", 
+              mean_depth)
+    input_nml(fla_fil, label = "LAKE_PARAMS", key = "latitude_lk", 
+              lat)
+  }
+  if ("GLM" %in% model) {
+    glm_nml <- file.path(folder, get_yaml_value(config_file, 
+                                                "config_files", "GLM"))
+    nml <- read_nml(glm_nml)
+    glm_hyp <- hyp
+    glm_hyp[, 1] <- elev - glm_hyp[, 1]
+    Ao <- max(glm_hyp[, 2])
+    bsn_wid <- sqrt((2 * Ao)/pi)
+    bsn_len <- 2 * bsn_wid
+    min_layer_thick <- get_nml_value(nml, "min_layer_thick")
+    max_layers <- round(max_depth/min_layer_thick) + nrow(hyp)
+    print(paste0("GOTM max_layers = ",max_layers))
+    if (!("crest_elev" %in% names(nml[["morphometry"]]))) {
+      nml[["morphometry"]][["crest_elev"]] <- 0
+    }
+    inp_list <- list(lake_name = get_yaml_value(config_file, 
+                                                "location", "name"), latitude = lat, longitude = lon, 
+                     lake_depth = max_depth, crest_elev = max((glm_hyp[, 
+                                                                       1])), bsn_vals = length(glm_hyp[, 1]), H = rev(glm_hyp[, 
+                                                                                                                              1]), A = rev(glm_hyp[, 2]), bsn_len = bsn_len, 
+                     bsn_wid = bsn_wid, max_layers = max_layers, max_layer_thick = 1, 
+                     lake_depth = init_depth)
+    print(paste0("GOTM inp_list = ",inp_list))
+    nml <- glmtools::set_nml(nml, arg_list = inp_list)
+    write_nml(nml, glm_nml)
+  }
+  if ("GOTM" %in% model) {
+    got_yaml <- file.path(folder, get_yaml_value(config_file, 
+                                                 "config_files", "GOTM"))
+    input_yaml(got_yaml, "location", "name", get_yaml_value(config_file, 
+                                                            "location", "name"))
+    input_yaml(got_yaml, "location", "latitude", lat)
+    input_yaml(got_yaml, "location", "longitude", lon)
+    input_yaml(got_yaml, "location", "depth", max_depth)
+    input_yaml(got_yaml, "grid", "nlev", round(max_depth/0.01))
+    if (use_ice) {
+      input_yaml(got_yaml, "ice", "model", 2)
+    }
+    else {
+      input_yaml(got_yaml, "ice", "model", 0)
+    }
+    ndeps <- nrow(hyp)
+    got_hyp <- hyp
+    got_hyp[, 1] <- -got_hyp[, 1]
+    if (init_depth < max_depth) {
+      got_hyp$Depth_meter <- got_hyp$Depth_meter + (max_depth - 
+                                                      init_depth)
+    }
+    colnames(got_hyp) <- c(as.character(ndeps), "2")
+    write.table(got_hyp, "GOTM/hypsograph.dat", quote = FALSE, 
+                sep = "\t", row.names = FALSE, col.names = TRUE)
+    input_yaml(got_yaml, "location", "hypsograph", "hypsograph.dat")
+  }
+  if ("Simstrat" %in% model) {
+    sim_par <- file.path(folder, get_yaml_value(config_file, 
+                                                "config_files", "Simstrat"))
+    sim_hyp <- hyp
+    sim_hyp[, 1] <- -sim_hyp[, 1]
+    if (init_depth < max_depth) {
+      sim_hyp$Depth_meter <- sim_hyp$Depth_meter + (max_depth - 
+                                                      init_depth)
+    }
+    colnames(sim_hyp) <- c("Depth [m]", "Area [m^2]")
+    write.table(sim_hyp, "Simstrat/hypsograph.dat", quote = FALSE, 
+                sep = "\t", row.names = FALSE, col.names = TRUE)
+    input_json(sim_par, "Input", "Grid", round(max_depth/output_depths))
+    input_json(sim_par, "Input", "Morphology", "\"hypsograph.dat\"")
+    input_json(sim_par, "ModelParameters", "lat", lat)
+    if (use_ice) {
+      input_json(sim_par, "ModelConfig", "IceModel", 1)
+    }
+    else {
+      input_json(sim_par, "ModelConfig", "IceModel", 0)
+      input_json(sim_par, "ModelConfig", "SnowModel", 0)
+    }
+    surf_area <- max(sim_hyp[, 2])/1e+06
+    a_seiche <- 10^(-2.8591 + 0.7029 * log10(surf_area))
+    input_json(sim_par, "ModelParameters", "a_seiche", a_seiche)
+  }
+  if ("MyLake" %in% model) {
+    load(get_yaml_value(config_file, "config_files", "MyLake"))
+    c_shelter <- 1 - exp(-0.3 * (hyp$Area_meterSquared[1] * 
+                                   1e-06))
+    mylake_config[["Phys.par"]][5] <- c_shelter
+    mylake_config[["Phys.par"]][6] <- lat
+    mylake_config[["Phys.par"]][7] <- lon
+    if (init_depth < max_depth) {
+      myl_hyp <- hyp[(hyp$Depth_meter - max_depth) >= -init_depth, 
+      ]
+      myl_hyp$Depth_meter <- myl_hyp$Depth_meter - min(myl_hyp$Depth_meter)
+      mylake_config[["In.Az"]] <- as.matrix(myl_hyp$Area_meterSquared)
+      mylake_config[["In.Z"]] <- as.matrix(myl_hyp$Depth_meter)
+    }
+    else {
+      myl_hyp <- hyp
+      mylake_config[["In.Az"]] <- as.matrix(hyp$Area_meterSquared)
+      mylake_config[["In.Z"]] <- as.matrix(hyp$Depth_meter)
+    }
+    mylake_config[["In.FIM"]] <- matrix(rep(0.92, nrow(myl_hyp)), 
+                                        ncol = 1)
+    mylake_config[["In.Chlz.sed"]] <- matrix(rep(196747, 
+                                                 nrow(myl_hyp)), ncol = 1)
+    mylake_config[["In.TPz.sed"]] <- matrix(rep(756732, nrow(myl_hyp)), 
+                                            ncol = 1)
+    mylake_config[["In.DOCz"]] <- matrix(rep(3000, nrow(myl_hyp)), 
+                                         ncol = 1)
+    mylake_config[["In.Chlz"]] <- matrix(rep(7, nrow(myl_hyp)), 
+                                         ncol = 1)
+    mylake_config[["In.DOPz"]] <- matrix(rep(7, nrow(myl_hyp)), 
+                                         ncol = 1)
+    mylake_config[["In.TPz"]] <- matrix(rep(21, nrow(myl_hyp)), 
+                                        ncol = 1)
+    mylake_config[["In.Sz"]] <- matrix(rep(0, nrow(myl_hyp)), 
+                                       ncol = 1)
+    mylake_config[["In.Cz"]] <- matrix(rep(0, nrow(myl_hyp)), 
+                                       ncol = 1)
+    temp_fil <- gsub(".*/", "", get_yaml_value(config_file, 
+                                               "config_files", "MyLake"))
+    save(mylake_config, file = file.path(folder, "MyLake", 
+                                         temp_fil))
+  }
+  message("export_location complete!")
+}
+
+function (config_file, model = c("GOTM", "GLM", "Simstrat", "FLake", 
+    "MyLake"), dirs = TRUE, time = TRUE, location = TRUE, output_settings = TRUE, 
+    meteo = TRUE, init_cond = TRUE, extinction = TRUE, flow = TRUE, 
+    model_parameters = TRUE, folder = ".") 
+{
+    oldwd <- getwd()
+    setwd(folder)
+    original_tz <- Sys.getenv("TZ")
+    on.exit({
+        setwd(oldwd)
+        Sys.setenv(TZ = original_tz)
+    })
+    Sys.setenv(TZ = "GMT")
+    if (!file.exists(config_file)) {
+        stop(config_file, " does not exist.")
+    }
+    check_master_config(config_file, exp_cnf = TRUE)
+    model <- check_models(model)
+    if (dirs) {
+        export_dirs(config_file = config_file, model = model, 
+            folder = folder)
+    }
+    if (time) {
+        export_time(config_file = config_file, model = model, 
+            folder = folder)
+    }
+    if (location) {
+        export_location2(config_file = config_file, model = model, 
+            folder = folder)
+    }
+    if (output_settings) {
+        export_output_settings(config_file = config_file, model = model, 
+            folder = folder)
+    }
+    if (meteo) {
+        export_meteo(config_file = config_file, model = model, 
+            folder = folder)
+    }
+    if (init_cond) {
+        export_init_cond(config_file = config_file, model = model, 
+            print = TRUE, folder = folder)
+    }
+    if (extinction) {
+        export_extinction(config_file = config_file, model = model, 
+            folder = folder)
+    }
+    if (flow) {
+        export_flow(config_file = config_file, model = model, 
+            folder = folder)
+    }
+    if (model_parameters) {
+        export_model_parameters(config_file = config_file, model = model, 
+            folder = folder)
+    }
+}
+```
+
+```{r ensemblemodel}
+getwd()
+# setwd("../")
+# Set config file & models
+config_file <- "LakeEnsemblR_EERES.yaml"
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+model <- c("FLake","GOTM","Simstrat")
+
+# Example run
+# 1. Export settings - creates directories with all model setups and exports settings from the LER configuration file
+export_config(config_file = config_file, model = model)
+
+# 2. Run ensemble lake models
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 3)
+
+#Check configs
+# check_master_config(config_file= config_file, model=model, exp_cnf = T)
+```
+
+## Calibration
+
+The calibration is done using the function cali_ensemble. Due to errors by using this function on all models simultaneously, the results will be generated for each model solely. For each model, a calibration using a set of 100 parameter combinations is used. A Latin Hypercube Calibration (LHC) method is used in the calibration. With the function `plot_LHC`, the results can be shown graphically.
+
+Depending on some arguments given to cali_ensemble (we guess `parallel`), the output of the function will either be the results or the names of the .csv files which store the parameter sets and results. Due to this inconsistency in the code, we manually select the generated results from the folder "cali".
+
+```{r}
+# getting the model fit of the last ensemble run
+calc_fit(ncdf = "output/ensemble_output.nc", model = model)
+
+config_file = "LakeEnsemblR_EERES_bestparams.yaml"
+
+## run the calibration using the LHC method
+# cali_res_Simstrat <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
+#                           parallel = T, model = "SimStrat", ncores = 2)
+# cali_res_GOTM <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
+#                           parallel = T, model = "GOTM", ncores = 2)
+cali_res_FLake <- cali_ensemble2(config_file = config_file, num = 1, cmethod = "LHC",
+                          parallel = T, model = "FLake", ncores = 1)
+
+# we manually set the file names with the results
+res_file_GOTM <- paste0(getwd(),
+                            c("/cali/params_GOTM_LHC_n500.csv",
+                              "/cali/GOTM_LHC_n500.csv"))
+res_file_FLake <- paste0(getwd(),
+                            c("/cali/params_FLake_LHC_n100.csv",
+                              "/cali/FLake_LHC_n100.csv"))
+res_file_Simstrat <- paste0(getwd(),
+                            c("/cali/params_Simstrat_LHC_n500.csv",
+                              "/cali/Simstrat_LHC_n500.csv"))
+# we can plot the results of the latin hypercube calibrations using plot_LHC
+plot_LHC(config_file = config_file, model = "GOTM", res_files = res_file_GOTM,
+         qual_met = "nse", best = "high")
+# or we can plot it for all models using
+plot_LHC(config_file = config_file, model = "FLake", res_files = res_file_FLake,
+         qual_met = "nse", best = "high")
+plot_LHC(config_file = config_file, model = "SimStrat", res_files = res_file_Simstrat,
+         qual_met = "nse", best="high")
+```
+
+The results of the calibration can be extracted using `load_LHC_results`. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency (NSE) and mean absolute error (MAE) is printed.
+However we see in the scatterplots that the highest value of quality is not a good indicator for the calibration, since the highest values are scattered across whole parameter range. 
+
+TODO Vielleicht eher als einzelne Chunks mit Erklärung davor oder danach
+
+```{r caliresults}
+## Calibriation
+
+library(ggplot2)
+library(patchwork)
+library(randomForest)
+
+params_Sim = read.csv("cali/params_Simstrat_LHC_n500.csv")
+em_Sim = read.csv("cali/Simstrat_LHC_n500.csv")
+
+params_GOTM = read.csv("cali/params_GOTM_LHC_n500.csv")
+em_GOTM = read.csv("cali/GOTM_LHC_n500.csv")
+
+params_FLake = read.csv("cali/params_FLake_LHC_n100.csv")
+em_FLake = read.csv("cali/FLake_LHC_n100.csv")
+
+join_Sim = full_join(params_Sim, em_Sim, by = "par_id")
+join_GOTM = full_join(params_GOTM, em_GOTM, by = "par_id")
+join_FLake = full_join(params_FLake, em_FLake, by = "par_id")
+
+
+## Calculate composite error metric score
+
+  ## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+  w1 = 1/sd(join_Sim$rmse) # RMSE
+  w2 = 1/sd((1-join_Sim$nse)) # NSE
+  w3 = 1/sd(abs(join_Sim$bias)) # Bias
+  w4 = 1/sd(1- join_Sim$r) # R^2
+  
+  ## Compisite error metric
+  join_Sim$score = w1*join_Sim$rmse + 10*w2*(1-join_Sim$nse) + w3*abs(join_Sim$bias) + w4*(1- join_Sim$r)
+
+
+
+#### Visual assessment ####
+
+  ## Wind speed
+
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_Sim, aes(x = wind_speed)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  
+  
+  a_ws = ggplot(join_Sim, aes(x = wind_speed, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Wind Speed",
+         x = "Wind Speed",
+         y = "Composite Score")
+  
+  b_ws = ggplot(join_Sim, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Density of Wind Speed for Low Composite Score",
+         x = "Wind Speed",
+         y = "Weighted Density")
+  
+  a_ws+b_ws
+  
+  ## Optimal wind speed
+  print(optimal_wind_speed)
+  
+  
+  ## SWR
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_Sim, aes(x = swr)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_swr <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_swr = ggplot(join_Sim, aes(x = swr, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs swr",
+         x = "swr",
+         y = "Composite Score")
+  
+  b_swr = ggplot(join_Sim, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Density of swr for Low Composite Score",
+         x = "swr",
+         y = "Weighted Density")
+  
+  a_swr+b_swr
+  
+  print(optimal_swr)
+  
+  ## Kw
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_Sim, aes(x = Kw)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_Kw = ggplot(join_Sim, aes(x = Kw, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Kw",
+         x = "Kw",
+         y = "Composite Score")
+  
+  b_Kw = ggplot(join_Sim, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Density of Kw for Low Composite Score",
+         x = "Kw",
+         y = "Weighted Density")
+  
+  a_Kw+b_Kw
+  
+  print(optimal_Kw)
+  
+  ## a_seiche
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_Sim, aes(x = a_seiche)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_a_seiche <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_a_seiche = ggplot(join_Sim, aes(x = a_seiche, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_a_seiche, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs a_seiche",
+         x = "a_seiche",
+         y = "Composite Score")
+  
+  b_a_seiche = ggplot(join_Sim, aes(x = a_seiche)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_a_seiche, color = "red", linetype = "dashed") +
+    labs(title = "Density of a_seiche for Low Composite Score",
+         x = "a_seiche",
+         y = "Weighted Density")
+  
+  a_a_seiche+b_a_seiche
+  
+  print(optimal_a_seiche)
+  
+  
+  
+  #### Random Forest predictions ####
+  ## Use a random forest model to predict the best set of parameters (using brute force grid search) 
+  rf_model <- randomForest(score ~ wind_speed + swr + Kw + a_seiche, 
+                           data = join_Sim, 
+                           ntree = 500, importance = TRUE)
+  
+  importance(rf_model)  
+  varImpPlot(rf_model)  # Plot variable importance
+  
+
+  # Define ranges of parameters
+  wind_range <- seq(min(join_Sim$wind_speed), max(join_Sim$wind_speed), length.out = 50)
+  swr_range <- seq(min(join_Sim$swr), max(join_Sim$swr), length.out = 50)
+  Kw_range <- seq(min(join_Sim$Kw), max(join_Sim$Kw), length.out = 50)
+  a_seiche_range <- seq(min(join_Sim$a_seiche), max(join_Sim$a_seiche), length.out = 50)
+  
+  # Create all combinations
+  param_grid <- expand.grid(wind_speed = wind_range, swr = swr_range, Kw = Kw_range, a_seiche = a_seiche_range)
+  
+  # Predict scores
+  param_grid$predicted_score <- predict(rf_model, newdata = param_grid)
+  
+  # Find parameter set with the lowest predicted score
+  best_params_rf <- param_grid[which.min(param_grid$predicted_score), ]
+  print(best_params_rf)
+  
+
+  #### Rank ####
+  ## Ranking parameters sets on composite error score and describing parameter ranges of best sets
+  
+  ## Finding optimal parameters by ranking parameter sets by composite error score
+  join_Sim$rank <- rank(join_Sim$score)
+  
+  # Select the best 20% of models
+  best_params_rank <- join_Sim[join_Sim$rank <= quantile(join_Sim$rank, 0.1), ]
+  
+  # Summarize the best parameter ranges
+  #summary(best_params_rank[, c("wind_speed", "swr", "Kw", "a_seiche")])
+  sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "a_seiche")]), mean)
+  
+  
+  #### Comparing results
+  print("Optimal parameters based on visual assessment of density: \n:")
+  print(c(optimal_wind_speed, optimal_swr, optimal_Kw, optimal_a_seiche))
+  print("Best parameters based on random forest prediction: \n")
+  print(best_params_rf)
+  print("Best parameters based on composite metric: \n")
+  print(sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "a_seiche")]), mean))
+```
+
+TODO background information on Kw parameter and other parameters
+
+In the following model run we choose to apply each set of best parameters once and compare those results.
+
+## Calibrated Model Runs
+
+Following, the ensemble is run with the calibrated parameters. 
+
+TODO: Prepare configs for all runs and 
+
+```{r bestparamrun}
+Density_config = "LakeEnsemblR_EERES_cali_Density.yaml"
+RF_config = "LakeEnsemblR_EERES_cali_RF.yaml"
+CMetric_config = "LakeEnsemblR_EERES_cali_CMetric.yaml"
+
+model = c("FLake","GOTM","Simstrat")
+output_dir = "output"
+
+export_config(config_file = Density_config, model = model)
+run_ensemble(config_file = Density_config, model = model, parallel=T)
+dir.create("output_density")
+file.rename(output_dir, "output_density")
+
+
+export_config(config_file = RF_config, model = model)
+run_ensemble(config_file = RF_config, model = model, parallel=T)
+dir.create("output_RF")
+file.rename(output_dir, "output_RF")
+
+export_config(config_file = CMetric_config, model = model)
+run_ensemble(config_file = CMetric_config, model = model, parallel=T)
+dir.create("output_CMetric")
+file.rename(output_dir, "output_CMetric")
+```
+
+# Analysis
+
+## model results plotting
+
+```{r model results}
+## Set up
+ncdf <- "output_FLake_GOTM_Simstrat/ensemble_output.nc"
+model = c("FLake", "GOTM", "Simstrat")
+
+#### Results ####
+# Take a look at the model fits to the observed data
+error_metrics = calc_fit(ncdf = ncdf,
+         model = model,
+         var = "temp")
+
+
+
+##### Model fits #####
+
+##### Heatmap #####
+p1 <- plot_heatmap(ncdf)
+
+# Change the theme and increase text size for saving
+p1 <- p1 +
+  theme_classic(base_size = 24) + 
+  scale_colour_gradientn(limits = c(0, 21),
+                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+
+p1
+
+##### Built-in: Models vs. Oberservations, Residuals, Temperature range boxplots (per depth) #####
+
+# Plot ensemble mean at 0m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.1m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.1, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.15m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.15, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.2m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.2, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.25m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.25, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.3m
+# plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.3, residuals = TRUE, boxwhisker = TRUE)
+
+
+
+##### ggplot2: Water temperature predictions of models vs. observed temperatures (at depths in m: 0, 0.05, 0.1, 0.15, 0.2, 0.25) #####
+
+# Load post-processed output data into your workspace
+analyse_df <- analyse_ncdf(ncdf = ncdf, spin_up = NULL, drho = 0.1, model = model)
+
+
+# Example plot the summer stratification period
+strat_df <- analyse_df$strat
+out_df <- analyse_df$out_df
+obs <- analyse_df$obs_temp
+
+obs$model = "Observed"
+# obs$depths = obs$depths - 0.05
+out_df = rbind(out_df, obs)
+
+
+# Convert date column to POSIXct for proper time handling
+out_df <- out_df %>%
+  mutate(date = as.POSIXct(date, format = "%Y-%m-%d %H:%M:%S"),
+         depth_label = paste0(depths, " m"))  # Create depth label
+
+# Create the plot with labeled facets
+ggplot(out_df, aes(x = date, y = temp, color = model)) +
+  geom_line(alpha=0.5) +
+  facet_wrap(~depth_label, scales = "free_y") +  # Label depth with "m"
+  labs(title = "Water Temperature Predictions by Model",
+       x = "Date", y = "Temperature (°C)", color = "Model") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(size = 12))  # Make facet labels clearer
+
+```
+
+TODO: random error = homoscedasticity
+
+Systematic discrepancy: over or underprediction of temperature at certain depths/certain 
+
+# Appendix
+
+## Single model runs
+
+Following Code can be used to run single models and check for errors.
+
+```{r singlemodelruns}
+setwd("C:/Users/morit/Documents/ACP5_PondModel")
+## Test FLake ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "FLake")
+
+setwd("FLake")
+
+FLakeR::run_flake(verbose = TRUE)
+out <- read.table("output/output.dat", skip = 1, header = TRUE)
+plot(out$time, out$Ts, type = "l")
+
+setwd("../")
+
+## Test GLM ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "GLM")
+
+setwd("GLM")
+
+GLM3r::run_glm(verbose = TRUE)
+out <- glmtools::get_var("output/output.nc", "temp", reference = "surface")
+plot(out$DateTime, out[, 2], type = "l")
+
+setwd("../")
+
+## Test GOTM ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "GOTM")
+
+setwd("GOTM")
+
+GOTMr::run_gotm(verbose = TRUE)
+out <- gotmtools::get_vari("output/output.nc", "temp")
+plot(out$time, out[, 2], type = "l")
+
+setwd("../")
+
+## Test Simstrat ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "Simstrat")
+
+setwd("Simstrat")
+
+SimstratR::run_simstrat(par_file = "simstrat.par", verbose = TRUE)
+out <- read.table(file.path("output", "T_out.dat"), header = TRUE, 
+                  sep = ",", check.names = FALSE)
+plot(1:nrow(out), out[, ncol(out)], type = "l")
+
+setwd("../")
+
+
+## Test MyLake ----
+# 1. Example - creates directories with all model setup
+export_config(config_file = config_file, model = "MyLake")
+
+# setwd("MyLake")
+MyLakeR::run_mylake(sim_folder = ".", config_dat = "mylake.Rdata")
+load("/MyLake/output/output.RData")
+plot(res$tt, res$Tzt[1, ], type = "l")
+
+setwd("../")
+
+# END
+```
+
+## Simplified Calibration
+
+```{r bestsets}
+# load results of LHC in a data.frame
+model = c("FLake","GOTM","Simstrat")
+cali_res = list(res_file_FLake,res_file_GOTM,res_file_Simstrat)
+res_LHC <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res))
+
+# Use res_LHC to investigate the results of the calibration
+
+# get the best parameter set for each model using rmse
+best_p_rmse <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$rmse), ]), model)
+best_p_nse <- setNames(lapply(model, function(m)res_LHC[[m]][which.max(res_LHC[[m]]$nse), ]), model)
+best_p_mae <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$mae), ]), model)
+print("Set of parameters with lowest RMSE:")
+print(best_p_rmse)
+print("Set of parameters with highest NSE:")
+print(best_p_rmse)
+print("Set of parameters with lowest MAE:")
+print(best_p_rmse)
+```
+
+We see that the best fitting parameter is independent of the quality metric used (RMSE, NSE or MAE). Subsequently, we will use this set of parameters in the following model. Since the parameters for wind speed (wind_speed) and shortwave radiation scaling (swr) are shared across all the models, the mean value of these from the best sets of parameters is calculated in the following code. The model specific parameters are printed below.
+
+```{r bestparams}
+# Initialize a list to store the mean values for each model
+mean_values <- list()
+
+# Initialize vectors to store wind_speed and swr values across all models
+all_wind_speed <- c()
+all_swr <- c()
+all_kW <- c()
+
+# Function to calculate mean values for a given model
+calculate_means <- function(model_name) {
+  # Extract dataframes for the model from each list
+  df_rmse <- best_p_rmse[[model_name]]
+  df_nse <- best_p_nse[[model_name]]
+  df_mae <- best_p_mae[[model_name]]
+
+  # Combine the dataframes
+  combined_df <- rbind(df_rmse, df_nse, df_mae)
+
+  # Calculate mean for the specified parameters
+  mean_wind_speed <- mean(combined_df$wind_speed, na.rm = TRUE)
+  mean_swr <- mean(combined_df$swr, na.rm = TRUE)
+  mean_Kw <- mean(combined_df$Kw, na.rm = TRUE)
+
+  # Check if the parameter exists in the combined dataframe before calculating mean
+  mean_a_seiche <- ifelse("a_seiche" %in% colnames(combined_df),
+                           mean(combined_df$a_seiche, na.rm = TRUE), NA)
+  mean_turb_param_k_min <- ifelse("turb_param.k_min" %in% colnames(combined_df),
+                                   mean(combined_df$turb_param.k_min, na.rm = TRUE), NA)
+  mean_c_relax_C <- ifelse("c_relax_C" %in% colnames(combined_df),
+                           mean(combined_df$c_relax_C, na.rm = TRUE), NA)
+
+  # Append wind_speed and swr values to the global vectors
+  all_wind_speed <<- c(all_wind_speed, combined_df$wind_speed)
+  all_swr <<- c(all_swr, combined_df$swr)
+  all_Kw <<- c(all_kW, combined_df$Kw)
+
+  # Return the means as a named vector
+  return(c(mean_wind_speed, mean_swr, mean_Kw, mean_a_seiche, mean_turb_param_k_min, mean_c_relax_C))
+}
+
+# Calculate means for each model
+mean_values$FLake <- calculate_means("FLake")
+mean_values$GOTM <- calculate_means("GOTM")
+mean_values$Simstrat <- calculate_means("Simstrat")
+
+# Convert the list to a dataframe for better visualization
+mean_values_df <- do.call(rbind, mean_values)
+colnames(mean_values_df) <- c("mean_wind_speed", "mean_swr", "mean_Kw", "mean_a_seiche", "mean_turb_param.k_min", "mean_c_relax_C")
+
+# Calculate overall mean for wind_speed and swr across all models
+overall_mean_wind_speed <- mean(all_wind_speed, na.rm = TRUE)
+overall_mean_swr <- mean(all_swr, na.rm = TRUE)
+overall_mean_Kw <- mean(all_Kw, na.rm=TRUE)
+
+# Print the mean values for each model
+cat("Parameter combination with best fit: \n")
+print(mean_values_df)
+
+# Print the overall mean values
+cat("Overall mean wind_speed across all models:", overall_mean_wind_speed, "\n")
+cat("Overall mean swr across all models:", overall_mean_swr, "\n")
+cat("Overall mean Kw across all models:", overall_mean_Kw)
+```
+
+
+## Model runs of enlarged basin
+
+TODO: Think about setting fix_wtlvl to false since this may be important for stratification dynamics. TODO: Set the initial water temperature on a scientifically based information (Use the known temperature and add lower temperatures at lower depths)
+
+```{r scaledmodel}
+
+# 10x depth ----
+
+getwd()
+
+config_file <- "LakeEnsemblR_10depth.yaml"
+
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+
+model <- c("FLake","GOTM","Simstrat")
+
+export_config(config_file = config_file, model = model)
+
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+
+file.rename(paste0(getwd(),"output"),
+
+            paste0(getwd(),"output_10depth"))
+
+# 10x area ----
+
+config_file <- "LakeEnsemblR_10area.yaml"
+
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+
+model <- c("FLake","GOTM","Simstrat")
+
+export_config(config_file = config_file, model = model)
+
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+
+file.rename(paste0(getwd(),"output"),
+
+            paste0(getwd(),"output_10area"))
+
+# 10x area and 10x depth ----
+
+config_file <- "LakeEnsemblR_10area10depth.yaml"
+
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+
+model <- c("FLake","GOTM","Simstrat")
+
+export_config(config_file = config_file, model = model)
+
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+
+file.rename(paste0(getwd(),"output"),
+
+            paste0(getwd(),"output_10area10depth"))
+
+```
+
+## Nullmodel of Meteodata
+The following code creates a nullmodel of the meteorological data.
+
 ```{r Nullmodeldata, results=hide, include=FALSE}
 generate_random_meteo_data <- function(template, n) {
   sample_data <- data.frame(datetime = template$datetime)  # Keep datetime unchanged
@@ -269,479 +1144,5 @@ p1 <- p1 +
   scale_colour_gradientn(limits = c(0, 21),
                          colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
 p1
-
-```
-
-# Model
-
-## Ensemble model run
-
-Following Code runs the LER model. There are issues using GLM and MyLake in shallow ponds, therefore all following simulations are done using exclusively FLake, GOTM or Simstrat. We found that the model FLake calculates a mean depth of the lake from the volume (calculated from truncated square pyramids between the layers) and the surface area. This however seems to reduce the depth of shallow ponds below the depths of observed layers. Therefore we manually set the depth of the pond for FLake using the parameter `depth_w_lk`.
-
-```{r ensemblemodel}
-getwd()
-# setwd("../")
-# Set config file & models
-config_file <- "LakeEnsemblR_EERES.yaml"
-# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
-model <- c("FLake","GOTM","Simstrat")
-
-# Example run
-# 1. Export settings - creates directories with all model setups and exports settings from the LER configuration file
-export_config(config_file = config_file, model = model)
-
-# 2. Run ensemble lake models
-run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 3)
-
-#Check configs
-# check_master_config(config_file= config_file, model=model, exp_cnf = T)
-```
-
-## Calibration
-
-The calibration is done using the function cali_ensemble. Due to errors by using this function on all models simultaneously, the results will be generated for each model solely. For each model, a calibration using a set of 100 parameter combinations is used. A Latin Hypercube Calibration (LHC) method is used in the calibration. With the function `plot_LHC`, the results can be shown graphically.
-
-Depending on some arguments given to cali_ensemble (we guess `parallel`), the output of the function will either be the results or the names of the .csv files which store the parameter sets and results. Due to this inconsistency in the code, we manually select the generated results from the folder "cali".
-
-```{r}
-# getting the model fit of the last ensemble run
-calc_fit(ncdf = "output/ensemble_output.nc", model = model)
-
-config_file = "LakeEnsemblR_EERES_bestparams.yaml"
-
-# # run the calibration using the LHC method
-# cali_res_Simstrat <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
-#                           parallel = T, model = "SimStrat", ncores = 3)
-# cali_res_GOTM <- cali_ensemble(config_file = config_file, num = 30, cmethod = "LHC",
-#                           parallel = T, model = "GOTM", ncores = 3)
-cali_res_FLake <- cali_ensemble(config_file = config_file, num = 30, cmethod = "LHC",
-                          parallel = T, model = "FLake", ncores = 3)
-
-# we manually set the file names with the results
-res_file_GOTM <- paste0(getwd(),
-                            c("/cali/params_GOTM_LHC_n500.csv",
-                              "/cali/GOTM_LHC_n500.csv"))
-res_file_FLake <- paste0(getwd(),
-                            c("/cali/params_FLake_LHC_n100.csv",
-                              "/cali/FLake_LHC_n100.csv"))
-res_file_Simstrat <- paste0(getwd(),
-                            c("/cali/params_Simstrat_LHC_n500.csv",
-                              "/cali/Simstrat_LHC_n500.csv"))
-# we can plot the results of the latin hypercube calibrations using plot_LHC
-plot_LHC(config_file = config_file, model = "GOTM", res_files = res_file_GOTM,
-         qual_met = "nse", best = "high")
-# or we can plot it for all models using
-plot_LHC(config_file = config_file, model = "FLake", res_files = res_file_FLake,
-         qual_met = "nse", best = "high")
-plot_LHC(config_file = config_file, model = "SimStrat", res_files = res_file_Simstrat,
-         qual_met = "nse", best="high")
-```
-
-The results of the calibration can be extracted using `load_LHC_results`. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency (NSE) and mean absolute error (MAE) is printed.
-
-```{r bestsets}
-# load results of LHC in a data.frame
-model = c("FLake","GOTM","Simstrat")
-cali_res = list(res_file_FLake,res_file_GOTM,res_file_Simstrat)
-res_LHC <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res))
-
-# Use res_LHC to investigate the results of the calibration
-
-# get the best parameter set for each model using rmse
-best_p_rmse <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$rmse), ]), model)
-best_p_nse <- setNames(lapply(model, function(m)res_LHC[[m]][which.max(res_LHC[[m]]$nse), ]), model)
-best_p_mae <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$mae), ]), model)
-print("Set of parameters with lowest RMSE:")
-print(best_p_rmse)
-print("Set of parameters with highest NSE:")
-print(best_p_rmse)
-print("Set of parameters with lowest MAE:")
-print(best_p_rmse)
-```
-
-We see that the best fitting parameter is independent of the quality metric used (RMSE, NSE or MAE). Subsequently, we will use this set of parameters in the following model. Since the parameters for wind speed (wind_speed) and shortwave radiation scaling (swr) are shared across all the models, the mean value of these from the best sets of parameters is calculated in the following code. The model specific parameters are printed below.
-
-```{r bestparams}
-# Initialize a list to store the mean values for each model
-mean_values <- list()
-
-# Initialize vectors to store wind_speed and swr values across all models
-all_wind_speed <- c()
-all_swr <- c()
-all_kW <- c()
-
-# Function to calculate mean values for a given model
-calculate_means <- function(model_name) {
-  # Extract dataframes for the model from each list
-  df_rmse <- best_p_rmse[[model_name]]
-  df_nse <- best_p_nse[[model_name]]
-  df_mae <- best_p_mae[[model_name]]
-
-  # Combine the dataframes
-  combined_df <- rbind(df_rmse, df_nse, df_mae)
-
-  # Calculate mean for the specified parameters
-  mean_wind_speed <- mean(combined_df$wind_speed, na.rm = TRUE)
-  mean_swr <- mean(combined_df$swr, na.rm = TRUE)
-  mean_Kw <- mean(combined_df$Kw, na.rm = TRUE)
-
-  # Check if the parameter exists in the combined dataframe before calculating mean
-  mean_a_seiche <- ifelse("a_seiche" %in% colnames(combined_df),
-                           mean(combined_df$a_seiche, na.rm = TRUE), NA)
-  mean_turb_param_k_min <- ifelse("turb_param.k_min" %in% colnames(combined_df),
-                                   mean(combined_df$turb_param.k_min, na.rm = TRUE), NA)
-  mean_c_relax_C <- ifelse("c_relax_C" %in% colnames(combined_df),
-                           mean(combined_df$c_relax_C, na.rm = TRUE), NA)
-
-  # Append wind_speed and swr values to the global vectors
-  all_wind_speed <<- c(all_wind_speed, combined_df$wind_speed)
-  all_swr <<- c(all_swr, combined_df$swr)
-  all_Kw <<- c(all_kW, combined_df$Kw)
-
-  # Return the means as a named vector
-  return(c(mean_wind_speed, mean_swr, mean_Kw, mean_a_seiche, mean_turb_param_k_min, mean_c_relax_C))
-}
-
-# Calculate means for each model
-mean_values$FLake <- calculate_means("FLake")
-mean_values$GOTM <- calculate_means("GOTM")
-mean_values$Simstrat <- calculate_means("Simstrat")
-
-# Convert the list to a dataframe for better visualization
-mean_values_df <- do.call(rbind, mean_values)
-colnames(mean_values_df) <- c("mean_wind_speed", "mean_swr", "mean_Kw", "mean_a_seiche", "mean_turb_param.k_min", "mean_c_relax_C")
-
-# Calculate overall mean for wind_speed and swr across all models
-overall_mean_wind_speed <- mean(all_wind_speed, na.rm = TRUE)
-overall_mean_swr <- mean(all_swr, na.rm = TRUE)
-overall_mean_Kw <- mean(all_Kw, na.rm=TRUE)
-
-# Print the mean values for each model
-cat("Parameter combination with best fit: \n")
-print(mean_values_df)
-
-# Print the overall mean values
-cat("Overall mean wind_speed across all models:", overall_mean_wind_speed, "\n")
-cat("Overall mean swr across all models:", overall_mean_swr, "\n")
-cat("Overall mean Kw across all models:", overall_mean_Kw)
-```
-
-These parameters were implemented as initial parameters in a new configuration file (LakeEnsemblR_EERES_bestparams.yaml).
-
-## Extending the calibration range
-
-Now we expand the range of possible values since some of the best parameter sets have values close to the upper or lower bounds.
-
-```{r, results='hide'}
-config_file = "LakeEnsemblR_EERES_bestparams.yaml"
-model = c("FLake","GOTM","Simstrat")
-cali_res_GOTM_Simstrat_expanded <- cali_ensemble(config_file = config_file, num = 500, 
-                                                 cmethod = "LHC", parallel = FALSE, 
-                                                 model = c("GOTM","Simstrat"), 
-                                                 ncores = 2)
-cali_res_FLake_expanded <- cali_ensemble(config_file = config_file, num = 1,
-                                         cmethod = "LHC", parallel = FALSE,
-                                         model = "FLake")
-
-plot_Simstrat = plot_LHC(config_file = config_file, 
-         model = "Simstrat", 
-         res_files = cali_res_GOTM_Simstrat_expanded$Simstrat,
-         qual_met = "nse", best = "high")
-plot_GOTM = plot_LHC(config_file = config_file, 
-         model = "GOTM", 
-         res_files = cali_res_GOTM_Simstrat_expanded$GOTM,
-         qual_met = "nse", best = "high")
-plot_FLake = plot_LHC(config_file = config_file, 
-                      res_files = cali_res_FLake_expanded$FLake, 
-                      model="FLake",
-                      qual_met = "nse", best="high")
-
-cali_res_all = list(cali_res_FLake,cali_res_GOTM,cali_res_Simstrat)
-res_LHC_all <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res_all))
-
-# Use res_LHC to investigate the results of the calibration
-
-# get the best parameter set for each model using rmse
-best_p_rmse <- setNames(lapply(model, function(m)res_LHC_all[[m]][which.min(res_LHC_all[[m]]$rmse), ]), model)
-best_p_nse <- setNames(lapply(model, function(m)res_LHC_all[[m]][which.max(res_LHC_all[[m]]$nse), ]), model)
-best_p_mae <- setNames(lapply(model, function(m)res_LHC_all[[m]][which.min(res_LHC_all[[m]]$mae), ]), model)
-```
-
-## Model Run with best parameters
-
-Followingly, the ensemble is run with the calibrated parameters. TODO: all.
-
-```{r bestparamrun}
-config_file = "LakeEnsemblR_EERES_calibrated.yaml"
-model = c("FLake","GOTM","Simstrat")
-export_config(config_file = config_file, model = model)
-run_ensemble(config_file = config_file, model = model, parallel=T)
-```
-
-# Analysis
-
-Now we plot the heatmap of the ensemble run.
-
-```{r ensembleheatmap}
-## Plot model output using gotmtools/ggplot2
-# Extract names of all the variables in netCDF
-ncdf <- 'output/ensemble_output.nc'
-vars <- gotmtools::list_vars(ncdf)
-vars # Print variables
-
-p1 <- plot_heatmap(ncdf)
-# p1
-# Change the theme and increase text size for saving
-p1 <- p1 +
-  
-  theme_classic(base_size = 24) + 
-  scale_colour_gradientn(limits = c(0, 21),
-                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
-# Save as a png file
-p1
-# ggsave('output/ensemble_heatmap.png', p1,  dpi = 300,width = 384,height = 280, units = 'mm')
-
-```
-
-<<<<<<< HEAD
-TODO: not looked into this yet
-
-```{r PlotEnsembleOUptput}
-# Plot ensemble mean at 0.9m
-model = c("FLake", "GOTM", "Simstrat")
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.25)
-
-# Load watertemp from netCDF file as a list
-wtemp <- load_var(ncdf = ncdf, var = "temp", return = "list")
-names(wtemp)
-
-# Plot residual diagnostic plots
-plots <- plot_resid(var_list = wtemp) # Plot residuals - returns a list of plots
-names(plots) #
-
-# Plot residuals vs. depth ("res_depth")
-plots[[2]]
-
-# Analyse the netCDF output
-out <- analyse_ncdf(ncdf, model = model, spin_up = 0)
-names(out)
-str <- out[["strat"]]
-str[str$year == 2010, ]
-stats <- out[["stats"]]
-stats
-```
-
-# Appendix
-=======
-```{r model results}
-## Set up
-ncdf <- "output_FLake_GOTM_Simstrat/ensemble_output.nc"
-model = c("FLake", "GOTM", "Simstrat")
-
-#### Results ####
-# Take a look at the model fits to the observed data
-error_metrics = calc_fit(ncdf = ncdf,
-         model = model,
-         var = "temp")
-
-
-
-##### Model fits #####
-
-##### Heatmap #####
-p1 <- plot_heatmap(ncdf)
-
-# Change the theme and increase text size for saving
-p1 <- p1 +
-  theme_classic(base_size = 24) + 
-  scale_colour_gradientn(limits = c(0, 21),
-                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
-
-p1
-
-##### Built-in: Models vs. Oberservations, Residuals, Temperature range boxplots (per depth) #####
-
-# Plot ensemble mean at 0m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.1m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.1, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.15m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.15, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.2m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.2, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.25m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.25, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.3m
-# plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.3, residuals = TRUE, boxwhisker = TRUE)
-
-
-
-##### ggplot2: Water temperature predictions of models vs. observed temperatures (at depths in m: 0, 0.05, 0.1, 0.15, 0.2, 0.25) #####
-
-# Load post-processed output data into your workspace
-analyse_df <- analyse_ncdf(ncdf = ncdf, spin_up = NULL, drho = 0.1, model = model)
-
-
-# Example plot the summer stratification period
-strat_df <- analyse_df$strat
-out_df <- analyse_df$out_df
-obs <- analyse_df$obs_temp
-
-obs$model = "Observed"
-#obs$depths = obs$depths - 0.05
-out_df = rbind(out_df, obs)
-
-
-# Convert date column to POSIXct for proper time handling
-out_df <- out_df %>%
-  mutate(date = as.POSIXct(date, format = "%Y-%m-%d %H:%M:%S"),
-         depth_label = paste0(depths, " m"))  # Create depth label
-
-# Create the plot with labeled facets
-ggplot(out_df, aes(x = date, y = temp, color = model)) +
-  geom_line() +
-  facet_wrap(~depth_label, scales = "free_y") +  # Label depth with "m"
-  labs(title = "Water Temperature Predictions by Model",
-       x = "Date", y = "Temperature (°C)", color = "Model") +
-  theme_minimal() +
-  theme(legend.position = "bottom",
-        strip.text = element_text(size = 12))  # Make facet labels clearer
-
-
-
-
-```
->>>>>>> 57b123ab197072dcc6eb57472d486dd1525279fa
-
-## Single model runs
-
-Following Code can be used to run single models and check for errors.
-
-```{r singlemodelruns}
-setwd("C:/Users/morit/Documents/ACP5_PondModel")
-## Test FLake ----
-# 1. Example - creates directories with all model setup
-export_config(config_file = config_file, model = "FLake")
-
-setwd("FLake")
-
-FLakeR::run_flake(verbose = TRUE)
-out <- read.table("output/output.dat", skip = 1, header = TRUE)
-plot(out$time, out$Ts, type = "l")
-
-setwd("../")
-
-## Test GLM ----
-# 1. Example - creates directories with all model setup
-export_config(config_file = config_file, model = "GLM")
-
-setwd("GLM")
-
-GLM3r::run_glm(verbose = TRUE)
-out <- glmtools::get_var("output/output.nc", "temp", reference = "surface")
-plot(out$DateTime, out[, 2], type = "l")
-
-setwd("../")
-
-## Test GOTM ----
-# 1. Example - creates directories with all model setup
-export_config(config_file = config_file, model = "GOTM")
-
-setwd("GOTM")
-
-GOTMr::run_gotm(verbose = TRUE)
-out <- gotmtools::get_vari("output/output.nc", "temp")
-plot(out$time, out[, 2], type = "l")
-
-setwd("../")
-
-## Test Simstrat ----
-# 1. Example - creates directories with all model setup
-export_config(config_file = config_file, model = "Simstrat")
-
-setwd("Simstrat")
-
-SimstratR::run_simstrat(par_file = "simstrat.par", verbose = TRUE)
-out <- read.table(file.path("output", "T_out.dat"), header = TRUE, 
-                  sep = ",", check.names = FALSE)
-plot(1:nrow(out), out[, ncol(out)], type = "l")
-
-setwd("../")
-
-
-## Test MyLake ----
-# 1. Example - creates directories with all model setup
-export_config(config_file = config_file, model = "MyLake")
-
-# setwd("MyLake")
-MyLakeR::run_mylake(sim_folder = ".", config_dat = "mylake.Rdata")
-load("/MyLake/output/output.RData")
-plot(res$tt, res$Tzt[1, ], type = "l")
-
-setwd("../")
-
-# END
-```
-
-## Model runs of enlarged basin
-
-TODO: Think about setting fix_wtlvl to false since this may be important for stratification dynamics. TODO: Set the initial water temperature on a scientifically based information (Use the known temperature and add lower temperatures at lower depths)
-
-```{r scaledmodel}
-
-# 10x depth ----
-
-getwd()
-
-config_file <- "LakeEnsemblR_10depth.yaml"
-
-# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
-
-model <- c("FLake","GOTM","Simstrat")
-
-export_config(config_file = config_file, model = model)
-
-run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
-
-file.rename(paste0(getwd(),"output"),
-
-            paste0(getwd(),"output_10depth"))
-
-# 10x area ----
-
-config_file <- "LakeEnsemblR_10area.yaml"
-
-# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
-
-model <- c("FLake","GOTM","Simstrat")
-
-export_config(config_file = config_file, model = model)
-
-run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
-
-file.rename(paste0(getwd(),"output"),
-
-            paste0(getwd(),"output_10area"))
-
-# 10x area and 10x depth ----
-
-config_file <- "LakeEnsemblR_10area10depth.yaml"
-
-# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
-
-model <- c("FLake","GOTM","Simstrat")
-
-export_config(config_file = config_file, model = model)
-
-run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
-
-file.rename(paste0(getwd(),"output"),
-
-            paste0(getwd(),"output_10area10depth"))
 
 ```

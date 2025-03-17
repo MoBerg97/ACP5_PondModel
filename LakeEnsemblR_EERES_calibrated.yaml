@@ -5,7 +5,7 @@ location:
    elevation: 215                               # elevation of lake surface above sea level [m]
    depth: 1                                   # maximum water depth [m; min=0.0]
    hypsograph: hypsograph.csv                    # hypsograph [csv file]
-   init_depth: 0.3                              # initial height of lake surface relative to the bottom [m]
+   init_depth: 0.301                              # initial height of lake surface relative to the bottom [m]
 time:
    start: 2020-07-22 00:00:00                   # start date and time [yyyy-mm-dd HH:MM:SS]
    stop: 2021-06-14 00:00:00                    # stop date and time [yyyy-mm-dd HH:MM:SS]
@@ -68,6 +68,7 @@ scaling_factors:                                # scaling factors to apply to me
 model_parameters:
    FLake:                                       # FLake specific parameters
       fetch_lk: 15.0                          # typical wind fetch [m]
+      depth_w_lk: 0.31
    GLM:                                         # GLM specific parameters
       bsn_len: 11                               # length of the lake basin, at crest height [m]
       bsn_wid: 4.5                              # width of the lake basin, at crest height [m]

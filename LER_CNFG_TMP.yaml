@@ -5,7 +5,7 @@ location:
    elevation: 215
    depth: 1
    hypsograph: hypsograph.csv
-   init_depth: 0.3
+   init_depth: 0.301
 time:
    start: 2020-07-22 00:00:00
    stop: 2021-06-14 00:00:00
@@ -47,7 +47,7 @@ output:
    file: ensemble_output
    format: netcdf
    depths: 0.05
-   compression: 1
+   compression: 4
    max_members: 25
    time_unit: hour
    time_step: 1
@@ -67,8 +67,8 @@ scaling_factors:
       wind_speed: 1.0
 model_parameters:
    FLake:
-      fetch_lk: 10.0
-      depth_w_lk: 0.3
+      fetch_lk: 15.0
+      depth_w_lk: 0.31
    GLM:
       bsn_len: 11
       bsn_wid: 4.5
@@ -80,57 +80,47 @@ model_parameters:
 calibration:
    met:
       wind_speed:
-         lower: 0.5
-         upper: 2
-         initial: 1
+         lower: 0.01
+         upper: 10
+         initial: 1.292821
          log: no
       swr:
-         lower: 0.5
-         upper: 1.5
-         initial: 1
+         lower: 0.01
+         upper: 10
+         initial: 1.440656
          log: no
    Kw:
-      lower: 0.5
-      upper: 1.5
-      initial: 0.98
+      lower: 0.01
+      upper: 10
+      initial: 1.0918
       log: no
    FLake:
       c_relax_C:
-         lower: 1.0e-08
+         lower: 0.0001
          upper: 0.01
-         initial: 0.003
-         log: no
-      depth_bs_lk:
-         lower: 0
-         upper: 5
-         initial: 1
-         log: no
-      T_bs_lk:
-         lower: 0
-         upper: 10
-         initial: 4
+         initial: 0.0022913
          log: no
    GLM:
       mixing/coef_mix_hyp:
-         lower: 0.001
-         upper: 1
+         lower: 0.01
+         upper: 10
          initial: 0.5
          log: no
    GOTM:
       turb_param/k_min:
          lower: 5E-10
-         upper: 5E-2
-         initial: 1E-5
+         upper: 5E-1
+         initial: 3.192033e-05
          log: yes
    Simstrat:
       a_seiche:
-         lower: 1.0e-06
+         lower: 1.0e-05
          upper: 0.01
-         initial: 0.001
+         initial: 0.0016984
          log: no
    MyLake:
       Phys.par/C_shelter:
-         lower: 0.14
-         upper: 0.16
+         lower: 0.01
+         upper: 0.5
          initial: 0.15
          log: no

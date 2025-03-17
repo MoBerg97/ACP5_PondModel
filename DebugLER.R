@@ -8,7 +8,6 @@
 # library(LakeEnsemblR)
 
 r <- unclass(lsf.str(envir = asNamespace("LakeEnsemblR"), all = T))
-
 # create functions in the Global Env. with the same name
 for(name in r) eval(parse(text=paste0(name, '<-LakeEnsemblR:::', name)))
 
@@ -464,9 +463,9 @@ cali_ensemble2 = function (config_file, num = NULL, param_file = NULL, cmethod =
   return(model_out)
 }
 
-cali_res_FLake_expanded <- cali_ensemble2(config_file = config_file, num = 1,
-                                         cmethod = "LHC", parallel = FALSE,
-                                         model = "FLake", ncores=2)
+cali_res_FLake_test <- cali_ensemble2(config_file = config_file, num = 1, cmethod = "LHC",
+                                 parallel = T, model = "FLake", ncores = 1)
+
 
 # export_location ####
 
@@ -517,7 +516,8 @@ export_location2 = function (config_file, model = c("GOTM", "GLM", "Simstrat", "
       vols <- c(vols, cal_v)
     }
     vol <- sum(vols)
-    mean_depth <- signif((vol/layer_a[1]), 4)
+    # mean_depth <- signif((vol/layer_a[1]), 4)
+    mean_depth <- 0.301
     input_nml(fla_fil, label = "SIMULATION_PARAMS", key = "h_ML_in", 
               mean_depth)
     input_nml(fla_fil, label = "LAKE_PARAMS", key = "depth_w_lk", 
@@ -526,6 +526,7 @@ export_location2 = function (config_file, model = c("GOTM", "GLM", "Simstrat", "
               lat)
   }
   if ("GLM" %in% model) {
+    browser()
     glm_nml <- file.path(folder, get_yaml_value(config_file, 
                                                 "config_files", "GLM"))
     nml <- read_nml(glm_nml)
@@ -550,6 +551,7 @@ export_location2 = function (config_file, model = c("GOTM", "GLM", "Simstrat", "
     write_nml(nml, glm_nml)
   }
   if ("GOTM" %in% model) {
+    browser()
     got_yaml <- file.path(folder, get_yaml_value(config_file, 
                                                  "config_files", "GOTM"))
     input_yaml(got_yaml, "location", "name", get_yaml_value(config_file, 
@@ -577,6 +579,7 @@ export_location2 = function (config_file, model = c("GOTM", "GLM", "Simstrat", "
     input_yaml(got_yaml, "location", "hypsograph", "hypsograph.dat")
   }
   if ("Simstrat" %in% model) {
+    browser()
     sim_par <- file.path(folder, get_yaml_value(config_file, 
                                                 "config_files", "Simstrat"))
     sim_hyp <- hyp
@@ -603,6 +606,7 @@ export_location2 = function (config_file, model = c("GOTM", "GLM", "Simstrat", "
     input_json(sim_par, "ModelParameters", "a_seiche", a_seiche)
   }
   if ("MyLake" %in% model) {
+    browser()
     load(get_yaml_value(config_file, "config_files", "MyLake"))
     c_shelter <- 1 - exp(-0.3 * (hyp$Area_meterSquared[1] * 
                                    1e-06))
@@ -746,5 +750,61 @@ plot_LHC2 = function (config_file, model, res_files, qual_met = "rmse", best_qua
 
 plot_LHC2(config_file = config_file, model = "GOTM", res_files = cali_res_GOTM$GOTM,
          qual_met = "nse", best = "high")
+ 
+# export_config ####
 
-###
+export_config2 <- function (config_file, model = c("GOTM", "GLM", "Simstrat", "FLake", 
+                                                  "MyLake"), dirs = TRUE, time = TRUE, location = TRUE, output_settings = TRUE, 
+                           meteo = TRUE, init_cond = TRUE, extinction = TRUE, flow = TRUE, 
+                           model_parameters = TRUE, folder = ".") 
+{
+  oldwd <- getwd()
+  setwd(folder)
+  original_tz <- Sys.getenv("TZ")
+on.exit({
+    setwd(oldwd)
+    Sys.setenv(TZ = original_tz)
+  })
+  Sys.setenv(TZ = "GMT")
+  if (!file.exists(config_file)) {
+    stop(config_file, " does not exist.")
+  }
+  check_master_config(config_file, exp_cnf = TRUE)
+  model <- check_models(model)
+  if (dirs) {
+    export_dirs(config_file = config_file, model = model, 
+                folder = folder)
+  }
+  if (time) {
+    export_time(config_file = config_file, model = model, 
+                folder = folder)
+  }
+  if (location) {
+    export_location(config_file = config_file, model = model, 
+                    folder = folder)
+  }
+  if (output_settings) {
+    export_output_settings(config_file = config_file, model = model, 
+                           folder = folder)
+  }
+  if (meteo) {
+    export_meteo(config_file = config_file, model = model, 
+                 folder = folder)
+  }
+  if (init_cond) {
+    export_init_cond(config_file = config_file, model = model, 
+                     print = TRUE, folder = folder)
+  }
+  if (extinction) {
+    export_extinction(config_file = config_file, model = model, 
+                      folder = folder)
+  }
+  if (flow) {
+    export_flow(config_file = config_file, model = model, 
+                folder = folder)
+  }
+  if (model_parameters) {
+    export_model_parameters(config_file = config_file, model = model, 
+                            folder = folder)
+  }
+}
