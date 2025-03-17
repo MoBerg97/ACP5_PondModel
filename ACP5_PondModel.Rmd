@@ -20,7 +20,7 @@ Sys.setenv("R_REMOTES_NO_ERRORS_FROM_WARNINGS" = "true")
 # remotes::install_github("aemon-j/gotmtools")
 # remotes::install_github("aemon-j/SimstratR")
 # remotes::install_github("aemon-j/MyLakeR")
-# remotes::install_github("aemon-j/LakeEnsemblR")
+remotes::install_github("aemon-j/LakeEnsemblR")
 # install.packages("C:/Users/morit/Documents/LakeEnsemblR", repos = NULL, type="source")
 library(readr)
 library(lubridate)
@@ -33,7 +33,9 @@ library(data.table)
 library(ggplot2)
 library(gotmtools)
 library(LakeEnsemblR)
-setwd("Documents/ACP5_PondModel")
+library(patchwork)
+library(randomForest)
+
 ```
 
 # Task
@@ -44,7 +46,7 @@ Note: When answering the above-mentioned research questions, the focus should be
 
 Portfolio: Description of methods, results and a (short) discussion. The important thing is the complete documentation of the conducted model simulations.
 
-# Preparation
+## Data Preparation
 
 The required format of data for the LakeEnsemblR model environment are csv tables containing the pond hypsograph, the Water Temperature Profile of the pond and the meteorological data. These files are prepared using the following code from the given datasets.
 
@@ -178,255 +180,106 @@ all(meteo_filled$time_group == complete_time_series)
 write.table(meteo_filled, file = "LakeEnsemblR_meteo_EERES.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
 ```
 
+```{r Nullmodeldata, results=hide, include=FALSE}
+generate_random_meteo_data <- function(template, n) {
+  sample_data <- data.frame(datetime = template$datetime)  # Keep datetime unchanged
+  
+  # Generate new data for each numeric column
+  for (col in names(template)[-1]) {  # Exclude the datetime column
+    if (is.numeric(template[[col]])) {
+      # Get min and max values for the column
+      min_val <- min(template[[col]], na.rm = TRUE)
+      max_val <- max(template[[col]], na.rm = TRUE)
+      
+      # Calculate mean and standard deviation of the original column
+      mean_val <- mean(template[[col]], na.rm = TRUE)
+      sd_val <- sd(template[[col]], na.rm = TRUE)
+      
+      # Generate new values based on normal distribution
+      new_values <- rnorm(n, mean = mean_val, sd = sd_val)
+      
+      # Ensure values are within the specified bounds
+      new_values <- pmax(new_values, min_val)  # Set a lower bound
+      new_values <- pmin(new_values, max_val)  # Set an upper bound
+      
+      sample_data[[col]] <- new_values
+    }
+  }
+  
+  return(sample_data)
+}
 
-# Modelling
+# Generate a new sample dataframe based on the template
+set.seed(123)  # For reproducibility
+n_samples <- nrow(meteo_filled)  # Number of samples to generate
+new_random_meteo_df <- generate_random_meteo_data(meteo_filled, n_samples)
+
+# Function to generate new random data for Water_Temperature_celsius
+generate_random_EERES_data <- function(template, n) {
+  sample_data <- data.frame(datetime = template$datetime, Depth_meter = template$Depth_meter)  # Keep datetime and Depth unchanged
+  
+  # Get min and max values for Water_Temperature_celsius
+  min_temp <- min(template$Water_Temperature_celsius, na.rm = TRUE)
+  max_temp <- max(template$Water_Temperature_celsius, na.rm = TRUE)
+  
+  # Generate new temperature values
+  mean_temp <- mean(template$Water_Temperature_celsius, na.rm = TRUE)
+  sd_temp <- sd(template$Water_Temperature_celsius, na.rm = TRUE)
+  
+  # Generate new temperature values and ensure they are within the specified bounds
+  new_temp_values <- rnorm(n, mean = mean_temp, sd = sd_temp)
+  new_temp_values <- pmax(new_temp_values, min_temp)  # Ensure values are not below min_temp
+  new_temp_values <- pmin(new_temp_values, max_temp)  # Ensure values are not above max_temp
+  
+  sample_data$Water_Temperature_celsius <- new_temp_values
+  
+  return(sample_data)
+}
+
+
+# Generate a new sample dataframe based on the template
+set.seed(123)  # For reproducibility
+n_samples <- nrow(EERES_T_long)  # Number of samples to generate
+new_random_EERES_df <- generate_random_EERES_data(EERES_T_long, n_samples)
+
+write.table(new_random_meteo_df, file = "LakeEnsemblR_meteo.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+write.table(new_random_EERES_df, file = "LakeEnsemblR_wtemp_profile.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
+```
+
+```{r Nullmodel, results=hide, include=FALSE}
+getwd()
+# setwd("../")
+# Set config file & models
+config_file <- "LakeEnsemblR.yaml"
+# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
+model <- c("FLake","GOTM","Simstrat")
+
+# Example run
+# 1. Export settings - creates directories with all model setups and exports settings from the LER configuration file
+export_config(config_file = config_file, model = model)
+
+# 2. Run ensemble lake models
+run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
+
+ncdf <- 'output/ensemble_output.nc'
+vars <- gotmtools::list_vars(ncdf)
+vars # Print variables
+
+p1 <- plot_heatmap(ncdf)
+p1 <- p1 +
+  theme_classic(base_size = 24) + 
+  scale_colour_gradientn(limits = c(0, 21),
+                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+p1
+
+```
+
+# Model
 
 ## Ensemble model run
 
-Following Code runs the LER model. There are issues using GLM and MyLake in shallow ponds, therefore all following simulations are done using exclusively FLake, GOTM or Simstrat. We found that the model FLake calculates a mean depth of the lake from the volume (calculated from truncated square pyramids between the layers) and the surface area. This however seems to reduce the depth of shallow ponds below the depths of observed layers. 
-
-Therefore we employ a function `cali_ensemble2` that hardcodes the mean_depth of 0.3 m.
-
-```{r export_location, results = 'hide', include=FALSE}
-r <- unclass(lsf.str(envir = asNamespace("LakeEnsemblR"), all = T))
-# create functions in the Global Env. with the same name
-for(name in r) eval(parse(text=paste0(name, '<-LakeEnsemblR:::', name)))
-export_location2 = function (config_file, model = c("GOTM", "GLM", "Simstrat", "FLake", 
-                                 "MyLake"), folder = ".") 
-{
-  oldwd <- getwd()
-  setwd(folder)
-  on.exit({
-    setwd(oldwd)
-  })
-  model <- check_models(model)
-  lat <- get_yaml_value(config_file, "location", "latitude")
-  lon <- get_yaml_value(config_file, "location", "longitude")
-  elev <- get_yaml_value(config_file, "location", "elevation")
-  max_depth <- get_yaml_value(config_file, "location", "depth")
-  init_depth <- get_yaml_value(config_file, "location", "init_depth")
-  hyp_file <- get_yaml_value(config_file, "location", "hypsograph")
-  if (!file.exists(hyp_file)) {
-    stop(hyp_file, " does not exist. Check filepath in ", 
-         config_file)
-  }
-  hyp <- read.csv(hyp_file)
-  use_ice <- get_yaml_value(config_file, "ice", "use")
-  output_depths <- get_yaml_value(config_file, "output", "depths")
-  if ("FLake" %in% model) {
-    browser()
-    fla_fil <- file.path(folder, get_yaml_value(config_file, 
-                                                "config_files", "FLake"))
-    bth_area <- hyp$Area_meterSquared
-    bth_depth <- hyp$Depth_meter
-    top <- min(bth_depth)
-    bottom <- max(bth_depth)
-    layer_d <- seq(top, bottom, 0.1)
-    layer_a <- stats::approx(bth_depth, bth_area, layer_d)$y
-    if (init_depth < max_depth) {
-      layer_a <- layer_a[(init_depth + (layer_d - max_depth)) >= 
-                           0]
-      layer_d <- layer_d[(init_depth + (layer_d - max_depth)) >= 
-                           0]
-      layer_d <- layer_d - min(layer_d)
-    }
-    vols <- c()
-    for (i in 2:length(layer_d)) {
-      h <- layer_d[i] - layer_d[i - 1]
-      cal_v <- (h/3) * (layer_a[i] + layer_a[i - 1] + sqrt(layer_a[i] * 
-                                                             layer_a[i - 1]))
-      vols <- c(vols, cal_v)
-    }
-    vol <- sum(vols)
-    # mean_depth <- signif((vol/layer_a[1]), 4)
-    mean_depth <- 0.3
-    input_nml(fla_fil, label = "SIMULATION_PARAMS", key = "h_ML_in", 
-              mean_depth)
-    input_nml(fla_fil, label = "LAKE_PARAMS", key = "depth_w_lk", 
-              mean_depth)
-    input_nml(fla_fil, label = "LAKE_PARAMS", key = "latitude_lk", 
-              lat)
-  }
-  if ("GLM" %in% model) {
-    glm_nml <- file.path(folder, get_yaml_value(config_file, 
-                                                "config_files", "GLM"))
-    nml <- read_nml(glm_nml)
-    glm_hyp <- hyp
-    glm_hyp[, 1] <- elev - glm_hyp[, 1]
-    Ao <- max(glm_hyp[, 2])
-    bsn_wid <- sqrt((2 * Ao)/pi)
-    bsn_len <- 2 * bsn_wid
-    min_layer_thick <- get_nml_value(nml, "min_layer_thick")
-    max_layers <- round(max_depth/min_layer_thick) + nrow(hyp)
-    print(paste0("GOTM max_layers = ",max_layers))
-    if (!("crest_elev" %in% names(nml[["morphometry"]]))) {
-      nml[["morphometry"]][["crest_elev"]] <- 0
-    }
-    inp_list <- list(lake_name = get_yaml_value(config_file, 
-                                                "location", "name"), latitude = lat, longitude = lon, 
-                     lake_depth = max_depth, crest_elev = max((glm_hyp[, 
-                                                                       1])), bsn_vals = length(glm_hyp[, 1]), H = rev(glm_hyp[, 
-                                                                                                                              1]), A = rev(glm_hyp[, 2]), bsn_len = bsn_len, 
-                     bsn_wid = bsn_wid, max_layers = max_layers, max_layer_thick = 1, 
-                     lake_depth = init_depth)
-    print(paste0("GOTM inp_list = ",inp_list))
-    nml <- glmtools::set_nml(nml, arg_list = inp_list)
-    write_nml(nml, glm_nml)
-  }
-  if ("GOTM" %in% model) {
-    got_yaml <- file.path(folder, get_yaml_value(config_file, 
-                                                 "config_files", "GOTM"))
-    input_yaml(got_yaml, "location", "name", get_yaml_value(config_file, 
-                                                            "location", "name"))
-    input_yaml(got_yaml, "location", "latitude", lat)
-    input_yaml(got_yaml, "location", "longitude", lon)
-    input_yaml(got_yaml, "location", "depth", max_depth)
-    input_yaml(got_yaml, "grid", "nlev", round(max_depth/0.01))
-    if (use_ice) {
-      input_yaml(got_yaml, "ice", "model", 2)
-    }
-    else {
-      input_yaml(got_yaml, "ice", "model", 0)
-    }
-    ndeps <- nrow(hyp)
-    got_hyp <- hyp
-    got_hyp[, 1] <- -got_hyp[, 1]
-    if (init_depth < max_depth) {
-      got_hyp$Depth_meter <- got_hyp$Depth_meter + (max_depth - 
-                                                      init_depth)
-    }
-    colnames(got_hyp) <- c(as.character(ndeps), "2")
-    write.table(got_hyp, "GOTM/hypsograph.dat", quote = FALSE, 
-                sep = "\t", row.names = FALSE, col.names = TRUE)
-    input_yaml(got_yaml, "location", "hypsograph", "hypsograph.dat")
-  }
-  if ("Simstrat" %in% model) {
-    sim_par <- file.path(folder, get_yaml_value(config_file, 
-                                                "config_files", "Simstrat"))
-    sim_hyp <- hyp
-    sim_hyp[, 1] <- -sim_hyp[, 1]
-    if (init_depth < max_depth) {
-      sim_hyp$Depth_meter <- sim_hyp$Depth_meter + (max_depth - 
-                                                      init_depth)
-    }
-    colnames(sim_hyp) <- c("Depth [m]", "Area [m^2]")
-    write.table(sim_hyp, "Simstrat/hypsograph.dat", quote = FALSE, 
-                sep = "\t", row.names = FALSE, col.names = TRUE)
-    input_json(sim_par, "Input", "Grid", round(max_depth/output_depths))
-    input_json(sim_par, "Input", "Morphology", "\"hypsograph.dat\"")
-    input_json(sim_par, "ModelParameters", "lat", lat)
-    if (use_ice) {
-      input_json(sim_par, "ModelConfig", "IceModel", 1)
-    }
-    else {
-      input_json(sim_par, "ModelConfig", "IceModel", 0)
-      input_json(sim_par, "ModelConfig", "SnowModel", 0)
-    }
-    surf_area <- max(sim_hyp[, 2])/1e+06
-    a_seiche <- 10^(-2.8591 + 0.7029 * log10(surf_area))
-    input_json(sim_par, "ModelParameters", "a_seiche", a_seiche)
-  }
-  if ("MyLake" %in% model) {
-    load(get_yaml_value(config_file, "config_files", "MyLake"))
-    c_shelter <- 1 - exp(-0.3 * (hyp$Area_meterSquared[1] * 
-                                   1e-06))
-    mylake_config[["Phys.par"]][5] <- c_shelter
-    mylake_config[["Phys.par"]][6] <- lat
-    mylake_config[["Phys.par"]][7] <- lon
-    if (init_depth < max_depth) {
-      myl_hyp <- hyp[(hyp$Depth_meter - max_depth) >= -init_depth, 
-      ]
-      myl_hyp$Depth_meter <- myl_hyp$Depth_meter - min(myl_hyp$Depth_meter)
-      mylake_config[["In.Az"]] <- as.matrix(myl_hyp$Area_meterSquared)
-      mylake_config[["In.Z"]] <- as.matrix(myl_hyp$Depth_meter)
-    }
-    else {
-      myl_hyp <- hyp
-      mylake_config[["In.Az"]] <- as.matrix(hyp$Area_meterSquared)
-      mylake_config[["In.Z"]] <- as.matrix(hyp$Depth_meter)
-    }
-    mylake_config[["In.FIM"]] <- matrix(rep(0.92, nrow(myl_hyp)), 
-                                        ncol = 1)
-    mylake_config[["In.Chlz.sed"]] <- matrix(rep(196747, 
-                                                 nrow(myl_hyp)), ncol = 1)
-    mylake_config[["In.TPz.sed"]] <- matrix(rep(756732, nrow(myl_hyp)), 
-                                            ncol = 1)
-    mylake_config[["In.DOCz"]] <- matrix(rep(3000, nrow(myl_hyp)), 
-                                         ncol = 1)
-    mylake_config[["In.Chlz"]] <- matrix(rep(7, nrow(myl_hyp)), 
-                                         ncol = 1)
-    mylake_config[["In.DOPz"]] <- matrix(rep(7, nrow(myl_hyp)), 
-                                         ncol = 1)
-    mylake_config[["In.TPz"]] <- matrix(rep(21, nrow(myl_hyp)), 
-                                        ncol = 1)
-    mylake_config[["In.Sz"]] <- matrix(rep(0, nrow(myl_hyp)), 
-                                       ncol = 1)
-    mylake_config[["In.Cz"]] <- matrix(rep(0, nrow(myl_hyp)), 
-                                       ncol = 1)
-    temp_fil <- gsub(".*/", "", get_yaml_value(config_file, 
-                                               "config_files", "MyLake"))
-    save(mylake_config, file = file.path(folder, "MyLake", 
-                                         temp_fil))
-  }
-  message("export_location complete!")
-}
-
-function (config_file, model = c("GOTM", "GLM", "Simstrat", "FLake", 
-    "MyLake"), dirs = TRUE, time = TRUE, location = TRUE, output_settings = TRUE, 
-    meteo = TRUE, init_cond = TRUE, extinction = TRUE, flow = TRUE, 
-    model_parameters = TRUE, folder = ".") 
-{
-    oldwd <- getwd()
-    setwd(folder)
-    original_tz <- Sys.getenv("TZ")
-    on.exit({
-        setwd(oldwd)
-        Sys.setenv(TZ = original_tz)
-    })
-    Sys.setenv(TZ = "GMT")
-    if (!file.exists(config_file)) {
-        stop(config_file, " does not exist.")
-    }
-    check_master_config(config_file, exp_cnf = TRUE)
-    model <- check_models(model)
-    if (dirs) {
-        export_dirs(config_file = config_file, model = model, 
-            folder = folder)
-    }
-    if (time) {
-        export_time(config_file = config_file, model = model, 
-            folder = folder)
-    }
-    if (location) {
-        export_location2(config_file = config_file, model = model, 
-            folder = folder)
-    }
-    if (output_settings) {
-        export_output_settings(config_file = config_file, model = model, 
-            folder = folder)
-    }
-    if (meteo) {
-        export_meteo(config_file = config_file, model = model, 
-            folder = folder)
-    }
-    if (init_cond) {
-        export_init_cond(config_file = config_file, model = model, 
-            print = TRUE, folder = folder)
-    }
-    if (extinction) {
-        export_extinction(config_file = config_file, model = model, 
-            folder = folder)
-    }
-    if (flow) {
-        export_flow(config_file = config_file, model = model, 
-            folder = folder)
-    }
-    if (model_parameters) {
-        export_model_parameters(config_file = config_file, model = model, 
-            folder = folder)
-    }
-}
-```
+Following Code runs the LER model. There are issues using GLM and MyLake in shallow ponds, therefore all following simulations are done using exclusively FLake, GOTM or Simstrat. We found that the model FLake calculates a mean depth of the lake from the volume (calculated from truncated square pyramids between the layers) and the surface area. This however seems to reduce the depth of shallow ponds below the depths of observed layers. Therefore we manually set the depth of the pond for FLake using the parameter `depth_w_lk`.
 
 ```{r ensemblemodel}
 getwd()
@@ -449,7 +302,7 @@ run_ensemble(config_file = config_file, model = model, parallel = T, return_list
 
 ## Calibration
 
-The calibration is done using the function cali_ensemble. Due to errors by using this function on all models simultaneously, the results will be generated for each model solely. For each model, a calibration using a set of 100 parameter combinations is used. A Latin Hypercube Calibration (LHC) method is used in the calibration. With the function `plot_LHC`, the results can be shown graphically.
+The calibration is done using the function cali_ensemble. Due to errors by using this function on all models simultaneously, the results will be generated for each model individually For each model, a calibration using a set of 500 parameter combinations is used for the models Simstrat and GOTM. For FLake only 100 parameter combinations were used due to technical obstacles. A Latin Hypercube Calibration (LHC) method is used in the calibration. With the function `plot_LHC`, the results can be shown graphically.
 
 Depending on some arguments given to cali_ensemble (we guess `parallel`), the output of the function will either be the results or the names of the .csv files which store the parameter sets and results. Due to this inconsistency in the code, we manually select the generated results from the folder "cali".
 
@@ -459,13 +312,13 @@ calc_fit(ncdf = "output/ensemble_output.nc", model = model)
 
 config_file = "LakeEnsemblR_EERES_bestparams.yaml"
 
-## run the calibration using the LHC method
+# # run the calibration using the LHC method
 # cali_res_Simstrat <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
-#                           parallel = T, model = "SimStrat", ncores = 2)
-# cali_res_GOTM <- cali_ensemble(config_file = config_file, num = 500, cmethod = "LHC",
-#                           parallel = T, model = "GOTM", ncores = 2)
-cali_res_FLake <- cali_ensemble2(config_file = config_file, num = 1, cmethod = "LHC",
-                          parallel = T, model = "FLake", ncores = 1)
+#                           parallel = T, model = "SimStrat", ncores = 3)
+# cali_res_GOTM <- cali_ensemble(config_file = config_file, num = 30, cmethod = "LHC",
+#                           parallel = T, model = "GOTM", ncores = 3)
+cali_res_FLake <- cali_ensemble(config_file = config_file, num = 30, cmethod = "LHC",
+                          parallel = T, model = "FLake", ncores = 3)
 
 # we manually set the file names with the results
 res_file_GOTM <- paste0(getwd(),
@@ -477,43 +330,467 @@ res_file_FLake <- paste0(getwd(),
 res_file_Simstrat <- paste0(getwd(),
                             c("/cali/params_Simstrat_LHC_n500.csv",
                               "/cali/Simstrat_LHC_n500.csv"))
-# we can plot the results of the latin hypercube calibrations using plot_LHC
-plot_LHC(config_file = config_file, model = "GOTM", res_files = res_file_GOTM,
-         qual_met = "nse", best = "high")
-# or we can plot it for all models using
-plot_LHC(config_file = config_file, model = "FLake", res_files = res_file_FLake,
-         qual_met = "nse", best = "high")
-plot_LHC(config_file = config_file, model = "SimStrat", res_files = res_file_Simstrat,
-         qual_met = "nse", best="high")
+# # we can plot the results of the latin hypercube calibrations using plot_LHC
+# plot_LHC(config_file = config_file, model = "GOTM", res_files = res_file_GOTM,
+#          qual_met = "nse", best = "high")
+# # or we can plot it for all models using
+# plot_LHC(config_file = config_file, model = "FLake", res_files = res_file_FLake,
+#          qual_met = "nse", best = "high")
+# plot_LHC(config_file = config_file, model = "SimStrat", res_files = res_file_Simstrat,
+#          qual_met = "nse", best="high")
 ```
 
-The results of the calibration can be extracted using `load_LHC_results`. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency (NSE) and mean absolute error (MAE) is printed.
-However we see in the scatterplots that the highest value of quality is not a good indicator for the calibration, since the highest values are scattered across whole parameter range. 
+<!-- The results of the calibration can be extracted using `load_LHC_results`. Subsequently, the set of best parameters using the goodness of model fit measure Root Mean Squared Error (RMSE), Nash-Sutcliffe Efficiency (NSE) and mean absolute error (MAE) is printed. -->
 
-TODO Vielleicht eher als einzelne Chunks mit Erklärung davor oder danach
+The simulations using different sets of parameters were subsequently analyzed, aiming to identify parameter values which minimize deviations from observed data. For this purpose a composite error metric combining RMSE, NSE, Bias and **R^2** was calculated. Parameter values which minimized this composite score were chosen as the calibrated value.
 
-```{r caliresults}
-## Calibriation
+```{r parameter calibration}
+params_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_Simstrat_LHC_n500.csv")
+em_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/Simstrat_LHC_n500.csv")
 
-library(ggplot2)
-library(patchwork)
-library(randomForest)
+params_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_GOTM_LHC_n500.csv")
+em_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/GOTM_LHC_n500.csv")
 
-params_Sim = read.csv("cali/params_Simstrat_LHC_n500.csv")
-em_Sim = read.csv("cali/Simstrat_LHC_n500.csv")
-
-params_GOTM = read.csv("cali/params_GOTM_LHC_n500.csv")
-em_GOTM = read.csv("cali/GOTM_LHC_n500.csv")
-
-params_FLake = read.csv("cali/params_FLake_LHC_n100.csv")
-em_FLake = read.csv("cali/FLake_LHC_n100.csv")
+params_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_FLake_LHC_n100.csv")
+em_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/FLake_LHC_n100.csv")
 
 join_Sim = full_join(params_Sim, em_Sim, by = "par_id")
 join_GOTM = full_join(params_GOTM, em_GOTM, by = "par_id")
 join_FLake = full_join(params_FLake, em_FLake, by = "par_id")
 
 
-## Calculate composite error metric score
+## Merge data sets for calibration of shared parameters
+Sim_red = join_Sim %>% select(-a_seiche, -par_id)
+GOTM_red = join_GOTM %>% select(-turb_param.k_min, -par_id)
+FLake_red = join_FLake %>% select(-c_relax_C, -par_id)
+
+shared = rbind(Sim_red, GOTM_red, FLake_red)
+
+
+
+#### Calculate composite error metric score ####
+
+## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+w1 = 1/sd(join_Sim$rmse) # RMSE
+w2 = 1/sd((1-join_Sim$nse)) # NSE
+w3 = 1/sd(abs(join_Sim$bias)) # Bias
+w4 = 1/sd(1- join_Sim$r) # R^2
+
+## Compisite error metric
+join_Sim$score = w1*join_Sim$rmse + w2*(1-join_Sim$nse) + w3*abs(join_Sim$bias) + w4*(1- join_Sim$r)
+
+
+## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+w5 = 1/sd(join_GOTM$rmse) # RMSE
+w6 = 1/sd((1-join_GOTM$nse)) # NSE
+w7 = 1/sd(abs(join_GOTM$bias)) # Bias
+w8 = 1/sd(1- join_GOTM$r) # R^2
+
+## Compisite error metric
+join_GOTM$score = w5*join_GOTM$rmse + w6*(1-join_GOTM$nse) + w7*abs(join_GOTM$bias) + w8*(1- join_GOTM$r)
+
+
+## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+w9 = 1/sd(join_FLake$rmse) # RMSE
+w10 = 1/sd((1-join_FLake$nse)) # NSE
+w11 = 1/sd(abs(join_FLake$bias)) # Bias
+w12 = 1/sd(1- join_FLake$r) # R^2
+
+## Compisite error metric
+join_FLake$score = w9*join_FLake$rmse + w10*(1-join_FLake$nse) + w11*abs(join_FLake$bias) + w12*(1- join_FLake$r)
+
+
+## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+w13 = 1/sd(shared$rmse) # RMSE
+w14 = 1/sd((1-shared$nse)) # NSE
+w15 = 1/sd(abs(shared$bias)) # Bias
+w16 = 1/sd(1- shared$r) # R^2
+
+## Compisite error metric
+shared$score = w13*shared$rmse + w14*(1-shared$nse) + w15*abs(shared$bias) + w16*(1- shared$r)
+
+##### Shared model parameters #####
+
+## Wind speed
+
+# Extract the computed density data from ggplot
+dens_data <- ggplot_build(
+  ggplot(shared, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+)$data[[1]]
+
+# Find wind speed where density is maximized
+optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+
+
+
+
+a_ws = ggplot(shared, aes(x = wind_speed, y = score)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", color = "blue") +
+  geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+  labs(title = "Composite Score vs Wind Speed",
+       x = "Wind Speed",
+       y = "Composite Score")
+
+b_ws = ggplot(shared, aes(x = wind_speed)) +
+  geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+  geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+  labs(title = "Density of Wind Speed for Low Composite Score",
+       x = "Wind Speed",
+       y = "Weighted Density")
+
+a_ws+b_ws
+
+## Optimal wind speed
+print(optimal_wind_speed)
+
+
+## SWR
+# Extract the computed density data from ggplot
+dens_data <- ggplot_build(
+  ggplot(shared, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+)$data[[1]]
+
+# Find wind speed where density is maximized
+optimal_swr <- dens_data$x[which.max(dens_data$y)]
+
+
+a_swr = ggplot(shared, aes(x = swr, y = score)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", color = "blue") +
+  geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+  labs(title = "Composite Score vs swr",
+       x = "swr",
+       y = "Composite Score")
+
+b_swr = ggplot(shared, aes(x = swr)) +
+  geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+  geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+  labs(title = "Density of swr for Low Composite Score",
+       x = "swr",
+       y = "Weighted Density")
+
+a_swr+b_swr
+
+print(optimal_swr)
+
+## Kw
+# Extract the computed density data from ggplot
+dens_data <- ggplot_build(
+  ggplot(shared, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+)$data[[1]]
+
+# Find wind speed where density is maximized
+optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+
+
+a_Kw = ggplot(shared, aes(x = Kw, y = score)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", color = "blue") +
+  geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+  labs(title = "Composite Score vs Kw",
+       x = "Kw",
+       y = "Composite Score")
+
+b_Kw = ggplot(shared, aes(x = Kw)) +
+  geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+  geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+  labs(title = "Density of Kw for Low Composite Score",
+       x = "Kw",
+       y = "Weighted Density")
+
+a_Kw+b_Kw
+
+print(optimal_Kw)
+
+
+#### Model specific parameters ####
+
+  ##### Simstrat #####
+    
+    ## a_seiche
+    # Extract the computed density data from ggplot
+    dens_data <- ggplot_build(
+      ggplot(join_Sim, aes(x = a_seiche)) +
+        geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+    )$data[[1]]
+    
+    # Find wind speed where density is maximized
+    optimal_a_seiche <- dens_data$x[which.max(dens_data$y)]
+    
+    
+    a_a_seiche = ggplot(join_Sim, aes(x = a_seiche, y = score)) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(method = "loess", color = "blue") +
+      geom_vline(xintercept = optimal_a_seiche, color = "red", linetype = "dashed") +
+      labs(title = "Composite Score vs a_seiche",
+           x = "a_seiche",
+           y = "Composite Score")
+    
+    b_a_seiche = ggplot(join_Sim, aes(x = a_seiche)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+      geom_vline(xintercept = optimal_a_seiche, color = "red", linetype = "dashed") +
+      labs(title = "Density of a_seiche for Low Composite Score",
+           x = "a_seiche",
+           y = "Weighted Density")
+    
+    a_a_seiche+b_a_seiche
+    
+    print(optimal_a_seiche)
+    
+  ##### GOTM #####
+    
+    ## turb_param.k_min
+    # Extract the computed density data from ggplot
+    dens_data <- ggplot_build(
+      ggplot(join_GOTM, aes(x = turb_param.k_min)) +
+        geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+    )$data[[1]]
+    
+    # Find wind speed where density is maximized
+    optimal_turb_param.k_min <- dens_data$x[which.max(dens_data$y)]
+    
+    
+    a_turb_param.k_min = ggplot(join_GOTM, aes(x = turb_param.k_min, y = score)) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(method = "loess", color = "blue") +
+      geom_vline(xintercept = optimal_turb_param.k_min, color = "red", linetype = "dashed") +
+      labs(title = "Composite Score vs turb_param.k_min",
+           x = "turb_param.k_min",
+           y = "Composite Score")
+    
+    b_turb_param.k_min = ggplot(join_GOTM, aes(x = turb_param.k_min)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+      geom_vline(xintercept = optimal_turb_param.k_min, color = "red", linetype = "dashed") +
+      labs(title = "Density of turb_param.k_min for Low Composite Score",
+           x = "turb_param.k_min",
+           y = "Weighted Density")
+    
+    a_turb_param.k_min+b_turb_param.k_min
+    
+    print(optimal_turb_param.k_min)
+    
+  ##### FLake #####
+    
+    ## c_relax_C
+    # Extract the computed density data from ggplot
+    dens_data <- ggplot_build(
+      ggplot(join_FLake, aes(x = c_relax_C)) +
+        geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+    )$data[[1]]
+    
+    # Find wind speed where density is maximized
+    optimal_c_relax_C <- dens_data$x[which.max(dens_data$y)]
+    
+    
+    a_c_relax_C = ggplot(join_FLake, aes(x = c_relax_C, y = score)) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(method = "loess", color = "blue") +
+      geom_vline(xintercept = optimal_c_relax_C, color = "red", linetype = "dashed") +
+      labs(title = "Composite Score vs c_relax_C",
+           x = "c_relax_C",
+           y = "Composite Score")
+    
+    b_c_relax_C = ggplot(join_FLake, aes(x = c_relax_C)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+      geom_vline(xintercept = optimal_c_relax_C, color = "red", linetype = "dashed") +
+      labs(title = "Density of c_relax_C for Low Composite Score",
+           x = "c_relax_C",
+           y = "Weighted Density")
+    
+    a_c_relax_C+b_c_relax_C
+    
+    print(optimal_c_relax_C)
+
+```
+
+These optimized parameters were implemented as initial parameters in a new configuration file (LakeEnsemblR_EERES_calibrated.yaml). Note that calibration can be more extensive using different calibration methods and reiterating the simulation and evaluation process. However this would exceed the scope of the project and may lead to overfitting. Nevertheless calibration can be complex problem since different equally valid methods may lead to different calibrated values (See Appendix). The rather simple calibration method shall suffice for the purpose of applying the LakeEnsembleR package in practise.
+
+
+
+
+## Model Run with best parameters
+
+Followingly, the ensemble is run with the calibrated parameters. TODO: all.
+
+```{r bestparamrun}
+config_file = "LakeEnsemblR_EERES_calibrated.yaml"
+model = c("FLake","GOTM","Simstrat")
+export_config(config_file = config_file, model = model)
+run_ensemble(config_file = config_file, model = model, parallel=T)
+```
+
+# Analysis
+
+Now we plot the heatmap of the ensemble run.
+
+```{r ensembleheatmap}
+## Plot model output using gotmtools/ggplot2
+# Extract names of all the variables in netCDF
+ncdf <- 'output/ensemble_output.nc'
+vars <- gotmtools::list_vars(ncdf)
+vars # Print variables
+
+p1 <- plot_heatmap(ncdf)
+# p1
+# Change the theme and increase text size for saving
+p1 <- p1 +
+  
+  theme_classic(base_size = 24) + 
+  scale_colour_gradientn(limits = c(0, 21),
+                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+# Save as a png file
+p1
+# ggsave('output/ensemble_heatmap.png', p1,  dpi = 300,width = 384,height = 280, units = 'mm')
+
+```
+
+<<<<<<< HEAD
+TODO: not looked into this yet
+
+```{r PlotEnsembleOUptput}
+# Plot ensemble mean at 0.9m
+model = c("FLake", "GOTM", "Simstrat")
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.25)
+
+# Load watertemp from netCDF file as a list
+wtemp <- load_var(ncdf = ncdf, var = "temp", return = "list")
+names(wtemp)
+
+# Plot residual diagnostic plots
+plots <- plot_resid(var_list = wtemp) # Plot residuals - returns a list of plots
+names(plots) #
+
+# Plot residuals vs. depth ("res_depth")
+plots[[2]]
+
+# Analyse the netCDF output
+out <- analyse_ncdf(ncdf, model = model, spin_up = 0)
+names(out)
+str <- out[["strat"]]
+str[str$year == 2010, ]
+stats <- out[["stats"]]
+stats
+```
+
+# Appendix
+=======
+```{r model results}
+## Set up
+ncdf <- "output_FLake_GOTM_Simstrat/ensemble_output.nc"
+model = c("FLake", "GOTM", "Simstrat")
+
+#### Results ####
+# Take a look at the model fits to the observed data
+error_metrics = calc_fit(ncdf = ncdf,
+         model = model,
+         var = "temp")
+
+
+
+##### Model fits #####
+
+##### Heatmap #####
+p1 <- plot_heatmap(ncdf)
+
+# Change the theme and increase text size for saving
+p1 <- p1 +
+  theme_classic(base_size = 24) + 
+  scale_colour_gradientn(limits = c(0, 21),
+                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
+
+p1
+
+##### Built-in: Models vs. Oberservations, Residuals, Temperature range boxplots (per depth) #####
+
+# Plot ensemble mean at 0m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.1m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.1, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.15m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.15, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.2m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.2, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.25m
+plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.25, residuals = TRUE, boxwhisker = TRUE)
+
+# Plot ensemble mean at 0.3m
+# plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.3, residuals = TRUE, boxwhisker = TRUE)
+
+
+
+##### ggplot2: Water temperature predictions of models vs. observed temperatures (at depths in m: 0, 0.05, 0.1, 0.15, 0.2, 0.25) #####
+
+# Load post-processed output data into your workspace
+analyse_df <- analyse_ncdf(ncdf = ncdf, spin_up = NULL, drho = 0.1, model = model)
+
+
+# Example plot the summer stratification period
+strat_df <- analyse_df$strat
+out_df <- analyse_df$out_df
+obs <- analyse_df$obs_temp
+
+obs$model = "Observed"
+#obs$depths = obs$depths - 0.05
+out_df = rbind(out_df, obs)
+
+
+# Convert date column to POSIXct for proper time handling
+out_df <- out_df %>%
+  mutate(date = as.POSIXct(date, format = "%Y-%m-%d %H:%M:%S"),
+         depth_label = paste0(depths, " m"))  # Create depth label
+
+# Create the plot with labeled facets
+ggplot(out_df, aes(x = date, y = temp, color = model)) +
+  geom_line() +
+  facet_wrap(~depth_label, scales = "free_y") +  # Label depth with "m"
+  labs(title = "Water Temperature Predictions by Model",
+       x = "Date", y = "Temperature (°C)", color = "Model") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(size = 12))  # Make facet labels clearer
+
+
+
+
+```
+>>>>>>> 57b123ab197072dcc6eb57472d486dd1525279fa
+
+
+## Calibration different methods
+```{r}
+
+params_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_Simstrat_LHC_n500.csv")
+em_Sim = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/Simstrat_LHC_n500.csv")
+
+params_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_GOTM_LHC_n500.csv")
+em_GOTM = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/GOTM_LHC_n500.csv")
+
+params_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/params_FLake_LHC_n100.csv")
+em_FLake = read.csv("C:/Users/euble/OneDrive/Master/ACP5/ACP5_PondModel_Main/ACP5_PondModel_Main/cali/FLake_LHC_n100.csv")
+
+join_Sim = full_join(params_Sim, em_Sim, by = "par_id")
+join_GOTM = full_join(params_GOTM, em_GOTM, by = "par_id")
+join_FLake = full_join(params_FLake, em_FLake, by = "par_id")
+
+
+## Merge data sets for calibration of shared parameters
+Sim_red = join_Sim %>% select(-a_seiche, -par_id)
+GOTM_red = join_GOTM %>% select(-turb_param.k_min, -par_id)
+FLake_red = join_FLake %>% select(-c_relax_C, -par_id)
+
+shared = rbind(Sim_red, GOTM_red, FLake_red)
+
+
+
+#### Calculate composite error metric score ####
 
   ## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
   w1 = 1/sd(join_Sim$rmse) # RMSE
@@ -522,11 +799,43 @@ join_FLake = full_join(params_FLake, em_FLake, by = "par_id")
   w4 = 1/sd(1- join_Sim$r) # R^2
   
   ## Compisite error metric
-  join_Sim$score = w1*join_Sim$rmse + 10*w2*(1-join_Sim$nse) + w3*abs(join_Sim$bias) + w4*(1- join_Sim$r)
+  join_Sim$score = w1*join_Sim$rmse + w2*(1-join_Sim$nse) + w3*abs(join_Sim$bias) + w4*(1- join_Sim$r)
 
+  
+  ## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+  w5 = 1/sd(join_GOTM$rmse) # RMSE
+  w6 = 1/sd((1-join_GOTM$nse)) # NSE
+  w7 = 1/sd(abs(join_GOTM$bias)) # Bias
+  w8 = 1/sd(1- join_GOTM$r) # R^2
+  
+  ## Compisite error metric
+  join_GOTM$score = w5*join_GOTM$rmse + w6*(1-join_GOTM$nse) + w7*abs(join_GOTM$bias) + w8*(1- join_GOTM$r)
+  
 
-
-#### Visual assessment ####
+  ## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+  w9 = 1/sd(join_FLake$rmse) # RMSE
+  w10 = 1/sd((1-join_FLake$nse)) # NSE
+  w11 = 1/sd(abs(join_FLake$bias)) # Bias
+  w12 = 1/sd(1- join_FLake$r) # R^2
+  
+  ## Compisite error metric
+  join_FLake$score = w9*join_FLake$rmse + w10*(1-join_FLake$nse) + w11*abs(join_FLake$bias) + w12*(1- join_FLake$r)
+  
+  
+  ## Weights (scaled with standard deviation to approximate equal influence of individual metrics)
+  w13 = 1/sd(shared$rmse) # RMSE
+  w14 = 1/sd((1-shared$nse)) # NSE
+  w15 = 1/sd(abs(shared$bias)) # Bias
+  w16 = 1/sd(1- shared$r) # R^2
+  
+  ## Compisite error metric
+  shared$score = w13*shared$rmse + w14*(1-shared$nse) + w15*abs(shared$bias) + w16*(1- shared$r)
+  
+  
+  
+ 
+#### Simstrat ####
+##### Visual assessment #####
 
   ## Wind speed
 
@@ -654,17 +963,19 @@ join_FLake = full_join(params_FLake, em_FLake, by = "par_id")
   print(optimal_a_seiche)
   
   
-  
-  #### Random Forest predictions ####
+  ##### Random Forest predictions #####
   ## Use a random forest model to predict the best set of parameters (using brute force grid search) 
   rf_model <- randomForest(score ~ wind_speed + swr + Kw + a_seiche, 
                            data = join_Sim, 
                            ntree = 500, importance = TRUE)
   
+  print(rf_model) # ~82% of variance explained
+  
+  
   importance(rf_model)  
   varImpPlot(rf_model)  # Plot variable importance
   
-
+  
   # Define ranges of parameters
   wind_range <- seq(min(join_Sim$wind_speed), max(join_Sim$wind_speed), length.out = 50)
   swr_range <- seq(min(join_Sim$swr), max(join_Sim$swr), length.out = 50)
@@ -677,12 +988,24 @@ join_FLake = full_join(params_FLake, em_FLake, by = "par_id")
   # Predict scores
   param_grid$predicted_score <- predict(rf_model, newdata = param_grid)
   
-  # Find parameter set with the lowest predicted score
-  best_params_rf <- param_grid[which.min(param_grid$predicted_score), ]
-  print(best_params_rf)
+  # Determine the 10% quantile threshold
+  quantile_10 <- quantile(param_grid$predicted_score, probs = 0.0001)
+  
+  # Filter the dataset for the lowest 10% of predicted_score values
+  filtered_data <- param_grid[param_grid$predicted_score <= quantile_10, ]
+  
+  # Calculate the mean for each parameter in the filtered data
+  mean_values <- colMeans(filtered_data[, c("wind_speed", "swr", "Kw", "a_seiche")])
+  
+  
+  # Print the results
+  print(mean_values)
+  
   
 
-  #### Rank ####
+  
+
+  ##### Rank #####
   ## Ranking parameters sets on composite error score and describing parameter ranges of best sets
   
   ## Finding optimal parameters by ranking parameter sets by composite error score
@@ -693,143 +1016,657 @@ join_FLake = full_join(params_FLake, em_FLake, by = "par_id")
   
   # Summarize the best parameter ranges
   #summary(best_params_rank[, c("wind_speed", "swr", "Kw", "a_seiche")])
-  sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "a_seiche")]), mean)
+  rank = sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "a_seiche")]), mean)
   
   
   #### Comparing results
-  print("Optimal parameters based on visual assessment of density: \n:")
-  print(c(optimal_wind_speed, optimal_swr, optimal_Kw, optimal_a_seiche))
-  print("Best parameters based on random forest prediction: \n")
-  print(best_params_rf)
-  print("Best parameters based on composite metric: \n")
-  print(sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "a_seiche")]), mean))
+  density_Simstrat = c(optimal_wind_speed, optimal_swr, optimal_Kw, optimal_a_seiche, "Optimal density")
+  rf_Simstrat = c(mean_values, "Random Forest")
+  rank_Simstrat = c(rank, "Rank")  
+  
+  comparison_Simstrat = rbind(density_Simstrat, rf_Simstrat, rank_Simstrat)
+  comparison_Simstrat = as.data.frame(comparison_Simstrat)
+  names(comparison_Simstrat) = c("wind_speed", "swr", "Kw", "a_seiche", "Calibration method")
+  
+  
+  
+  
+  
+#### GOTM ####
+  ##### Visual assessment #####
+  
+  ## Wind speed
+  
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_GOTM, aes(x = wind_speed)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  
+  
+  a_ws = ggplot(join_GOTM, aes(x = wind_speed, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Wind Speed",
+         x = "Wind Speed",
+         y = "Composite Score")
+  
+  b_ws = ggplot(join_GOTM, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Density of Wind Speed for Low Composite Score",
+         x = "Wind Speed",
+         y = "Weighted Density")
+  
+  a_ws+b_ws
+  
+  ## Optimal wind speed
+  print(optimal_wind_speed)
+  
+  
+  ## SWR
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_GOTM, aes(x = swr)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_swr <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_swr = ggplot(join_GOTM, aes(x = swr, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs swr",
+         x = "swr",
+         y = "Composite Score")
+  
+  b_swr = ggplot(join_GOTM, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Density of swr for Low Composite Score",
+         x = "swr",
+         y = "Weighted Density")
+  
+  a_swr+b_swr
+  
+  print(optimal_swr)
+  
+  ## Kw
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_GOTM, aes(x = Kw)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_Kw = ggplot(join_GOTM, aes(x = Kw, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Kw",
+         x = "Kw",
+         y = "Composite Score")
+  
+  b_Kw = ggplot(join_GOTM, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Density of Kw for Low Composite Score",
+         x = "Kw",
+         y = "Weighted Density")
+  
+  a_Kw+b_Kw
+  
+  print(optimal_Kw)
+  
+  ## turb_param.k_min
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_GOTM, aes(x = turb_param.k_min)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_turb_param.k_min <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_turb_param.k_min = ggplot(join_GOTM, aes(x = turb_param.k_min, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_turb_param.k_min, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs turb_param.k_min",
+         x = "turb_param.k_min",
+         y = "Composite Score")
+  
+  b_turb_param.k_min = ggplot(join_GOTM, aes(x = turb_param.k_min)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_turb_param.k_min, color = "red", linetype = "dashed") +
+    labs(title = "Density of turb_param.k_min for Low Composite Score",
+         x = "turb_param.k_min",
+         y = "Weighted Density")
+  
+  a_turb_param.k_min+b_turb_param.k_min
+  
+  print(optimal_turb_param.k_min)
+  
+  
+  ##### Random Forest predictions #####
+  ## Use a random forest model to predict the best set of parameters (using brute force grid search) 
+  rf_model <- randomForest(score ~ wind_speed + swr + Kw + turb_param.k_min, 
+                           data = join_GOTM, 
+                           ntree = 500, importance = TRUE)
+  
+  print(rf_model) # ~48% of variance explained
+
+  importance(rf_model)  
+  varImpPlot(rf_model)  # Plot variable importance
+  
+  
+  # Define ranges of parameters
+  wind_range <- seq(min(join_GOTM$wind_speed), max(join_GOTM$wind_speed), length.out = 50)
+  swr_range <- seq(min(join_GOTM$swr), max(join_GOTM$swr), length.out = 50)
+  Kw_range <- seq(min(join_GOTM$Kw), max(join_GOTM$Kw), length.out = 50)
+  turb_param.k_min_range <- seq(min(join_GOTM$turb_param.k_min), max(join_GOTM$turb_param.k_min), length.out = 50)
+  
+  # Create all combinations
+  param_grid <- expand.grid(wind_speed = wind_range, swr = swr_range, Kw = Kw_range, turb_param.k_min = turb_param.k_min_range)
+  
+  # Predict scores
+  param_grid$predicted_score <- predict(rf_model, newdata = param_grid)
+  
+  # Determine the 0.01% quantile threshold
+  quantile_10 <- quantile(param_grid$predicted_score, probs = 0.0001)
+  
+  # Filter the dataset for the lowest 10% of predicted_score values
+  filtered_data <- param_grid[param_grid$predicted_score <= quantile_10, ]
+  
+  # Calculate the mean for each parameter in the filtered data
+  mean_values <- colMeans(filtered_data[, c("wind_speed", "swr", "Kw", "turb_param.k_min")])
+  
+  # Print the results
+  print(mean_values)
+  
+  
+  
+  
+  
+  ##### Rank #####
+  ## Ranking parameters sets on composite error score and describing parameter ranges of best sets
+  
+  ## Finding optimal parameters by ranking parameter sets by composite error score
+  join_GOTM$rank <- rank(join_GOTM$score)
+  
+  # Select the best 20% of models
+  best_params_rank <- join_GOTM[join_GOTM$rank <= quantile(join_GOTM$rank, 0.1), ]
+  
+  # Summarize the best parameter ranges
+  #summary(best_params_rank[, c("wind_speed", "swr", "Kw", "turb_param.k_min")])
+  rank = sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "turb_param.k_min")]), mean)
+  
+  
+  #### Comparing results
+  density_GOTM = c(optimal_wind_speed, optimal_swr, optimal_Kw, optimal_turb_param.k_min, "Optimal density")
+  rf_GOTM = c(mean_values, "Random Forest")
+  rank_GOTM = c(rank, "Rank")  
+  
+  comparison_GOTM = rbind(density_GOTM, rf_GOTM, rank_GOTM)
+  comparison_GOTM = as.data.frame(comparison_GOTM)
+  names(comparison_GOTM) = c("wind_speed", "swr", "Kw", "turb_param.k_min", "Calibration method")
+  
+  
+  
+  
+  
+  
+  
+  
+#### FLake ####
+  ##### Visual assessment #####
+  
+  ## Wind speed
+  
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_FLake, aes(x = wind_speed)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  
+  
+  a_ws = ggplot(join_FLake, aes(x = wind_speed, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Wind Speed",
+         x = "Wind Speed",
+         y = "Composite Score")
+  
+  b_ws = ggplot(join_FLake, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Density of Wind Speed for Low Composite Score",
+         x = "Wind Speed",
+         y = "Weighted Density")
+  
+  a_ws+b_ws
+  
+  ## Optimal wind speed
+  print(optimal_wind_speed)
+  
+  
+  ## SWR
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_FLake, aes(x = swr)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_swr <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_swr = ggplot(join_FLake, aes(x = swr, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs swr",
+         x = "swr",
+         y = "Composite Score")
+  
+  b_swr = ggplot(join_FLake, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Density of swr for Low Composite Score",
+         x = "swr",
+         y = "Weighted Density")
+  
+  a_swr+b_swr
+  
+  print(optimal_swr)
+  
+  ## Kw
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_FLake, aes(x = Kw)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_Kw = ggplot(join_FLake, aes(x = Kw, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Kw",
+         x = "Kw",
+         y = "Composite Score")
+  
+  b_Kw = ggplot(join_FLake, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Density of Kw for Low Composite Score",
+         x = "Kw",
+         y = "Weighted Density")
+  
+  a_Kw+b_Kw
+  
+  print(optimal_Kw)
+  
+  ## c_relax_C
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(join_FLake, aes(x = c_relax_C)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_c_relax_C <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_c_relax_C = ggplot(join_FLake, aes(x = c_relax_C, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_c_relax_C, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs c_relax_C",
+         x = "c_relax_C",
+         y = "Composite Score")
+  
+  b_c_relax_C = ggplot(join_FLake, aes(x = c_relax_C)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_c_relax_C, color = "red", linetype = "dashed") +
+    labs(title = "Density of c_relax_C for Low Composite Score",
+         x = "c_relax_C",
+         y = "Weighted Density")
+  
+  a_c_relax_C+b_c_relax_C
+  
+  print(optimal_c_relax_C)
+  
+  
+  ##### Random Forest predictions #####
+  ## Use a random forest model to predict the best set of parameters (using brute force grid search) 
+  rf_model <- randomForest(score ~ wind_speed + swr + Kw + c_relax_C, 
+                           data = join_FLake, 
+                           ntree = 500, importance = TRUE)
+  
+  importance(rf_model)  
+  varImpPlot(rf_model)  # Plot variable importance
+  
+  print(rf_model) # ~80% of variance explained
+  
+  # Define ranges of parameters
+  wind_range <- seq(min(join_FLake$wind_speed), max(join_FLake$wind_speed), length.out = 50)
+  swr_range <- seq(min(join_FLake$swr), max(join_FLake$swr), length.out = 50)
+  Kw_range <- seq(min(join_FLake$Kw), max(join_FLake$Kw), length.out = 50)
+  c_relax_C_range <- seq(min(join_FLake$c_relax_C), max(join_FLake$c_relax_C), length.out = 50)
+  
+  # Create all combinations
+  param_grid <- expand.grid(wind_speed = wind_range, swr = swr_range, Kw = Kw_range, c_relax_C = c_relax_C_range)
+  
+  # Predict scores
+  param_grid$predicted_score <- predict(rf_model, newdata = param_grid)
+  
+  # Determine the 0.01% quantile threshold
+  quantile_10 <- quantile(param_grid$predicted_score, probs = 0.0001)
+  
+  # Filter the dataset for the lowest 10% of predicted_score values
+  filtered_data <- param_grid[param_grid$predicted_score <= quantile_10, ]
+  
+  # Calculate the mean for each parameter in the filtered data
+  mean_values <- colMeans(filtered_data[, c("wind_speed", "swr", "Kw", "c_relax_C")])
+  
+  # Print the results
+  print(mean_values)
+  
+  
+  
+  
+  
+  ##### Rank #####
+  ## Ranking parameters sets on composite error score and describing parameter ranges of best sets
+  
+  ## Finding optimal parameters by ranking parameter sets by composite error score
+  join_FLake$rank <- rank(join_FLake$score)
+  
+  # Select the best 20% of models
+  best_params_rank <- join_FLake[join_FLake$rank <= quantile(join_FLake$rank, 0.1), ]
+  
+  # Summarize the best parameter ranges
+  #summary(best_params_rank[, c("wind_speed", "swr", "Kw", "c_relax_C")])
+  rank = sapply((best_params_rank[, c("wind_speed", "swr", "Kw", "c_relax_C")]), mean)
+  
+  
+  #### Comparing results
+  density_FLake = c(optimal_wind_speed, optimal_swr, optimal_Kw, optimal_c_relax_C, "Optimal density")
+  rf_FLake = c(mean_values, "Random Forest")
+  rank_FLake = c(rank, "Rank")  
+  
+  comparison_FLake = rbind(density_FLake, rf_FLake, rank_FLake)
+  comparison_FLake = as.data.frame(comparison_FLake)
+  names(comparison_FLake) = c("wind_speed", "swr", "Kw", "c_relax_C", "Calibration method")
+  
+  
+  
+#### Shared parameters ####
+  ##### Visual assessment #####
+  
+  ## Wind speed
+  
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(shared, aes(x = wind_speed)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_wind_speed <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  
+  
+  a_ws = ggplot(shared, aes(x = wind_speed, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Wind Speed",
+         x = "Wind Speed",
+         y = "Composite Score")
+  
+  b_ws = ggplot(shared, aes(x = wind_speed)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_wind_speed, color = "red", linetype = "dashed") +
+    labs(title = "Density of Wind Speed for Low Composite Score",
+         x = "Wind Speed",
+         y = "Weighted Density")
+  
+  a_ws+b_ws
+  
+  ## Optimal wind speed
+  print(optimal_wind_speed)
+  
+  
+  ## SWR
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(shared, aes(x = swr)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_swr <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_swr = ggplot(shared, aes(x = swr, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs swr",
+         x = "swr",
+         y = "Composite Score")
+  
+  b_swr = ggplot(shared, aes(x = swr)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_swr, color = "red", linetype = "dashed") +
+    labs(title = "Density of swr for Low Composite Score",
+         x = "swr",
+         y = "Weighted Density")
+  
+  a_swr+b_swr
+  
+  print(optimal_swr)
+  
+  ## Kw
+  # Extract the computed density data from ggplot
+  dens_data <- ggplot_build(
+    ggplot(shared, aes(x = Kw)) +
+      geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4)
+  )$data[[1]]
+  
+  # Find wind speed where density is maximized
+  optimal_Kw <- dens_data$x[which.max(dens_data$y)]
+  
+  
+  a_Kw = ggplot(shared, aes(x = Kw, y = score)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "loess", color = "blue") +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Composite Score vs Kw",
+         x = "Kw",
+         y = "Composite Score")
+  
+  b_Kw = ggplot(shared, aes(x = Kw)) +
+    geom_density(aes(weight = 1 / score), fill = "blue", alpha = 0.4) +
+    geom_vline(xintercept = optimal_Kw, color = "red", linetype = "dashed") +
+    labs(title = "Density of Kw for Low Composite Score",
+         x = "Kw",
+         y = "Weighted Density")
+  
+  a_Kw+b_Kw
+  
+  print(optimal_Kw)
+  
+ 
+  
+  
+  ##### Random Forest predictions #####
+  ## Use a random forest model to predict the best set of parameters (using brute force grid search) 
+  rf_model <- randomForest(score ~ wind_speed + swr + Kw, 
+                           data = shared, 
+                           ntree = 500, importance = TRUE)
+  
+  importance(rf_model)  
+  varImpPlot(rf_model)  # Plot variable importance
+  
+  print(rf_model) # ~57% of variance explained
+  
+  # Define ranges of parameters
+  wind_range <- seq(min(shared$wind_speed), max(shared$wind_speed), length.out = 50)
+  swr_range <- seq(min(shared$swr), max(shared$swr), length.out = 50)
+  Kw_range <- seq(min(shared$Kw), max(shared$Kw), length.out = 50)
+
+  # Create all combinations
+  param_grid <- expand.grid(wind_speed = wind_range, swr = swr_range, Kw = Kw_range)
+  
+  # Predict scores
+  param_grid$predicted_score <- predict(rf_model, newdata = param_grid)
+  
+  # Determine the 0.1% quantile threshold
+  quantile_10 <- quantile(param_grid$predicted_score, probs = 0.001)
+  
+  # Filter the dataset for the lowest 10% of predicted_score values
+  filtered_data <- param_grid[param_grid$predicted_score <= quantile_10, ]
+  
+  # Calculate the mean for each parameter in the filtered data
+  mean_values <- colMeans(filtered_data[, c("wind_speed", "swr", "Kw")])
+  
+  # Print the results
+  print(mean_values)
+  
+  
+  
+  
+  
+  ##### Rank #####
+  ## Ranking parameters sets on composite error score and describing parameter ranges of best sets
+  
+  ## Finding optimal parameters by ranking parameter sets by composite error score
+  shared$rank <- rank(shared$score)
+  
+  # Select the best 20% of models
+  best_params_rank <- shared[shared$rank <= quantile(shared$rank, 0.1), ]
+  
+  # Summarize the best parameter ranges
+  #summary(best_params_rank[, c("wind_speed", "swr", "Kw", "c_relax_C")])
+  rank = sapply((best_params_rank[, c("wind_speed", "swr", "Kw")]), mean)
+  
+  
+  #### Comparing results
+  density_shared = c(optimal_wind_speed, optimal_swr, optimal_Kw, "Optimal density")
+  rf_shared = c(mean_values, "Random Forest")
+  rank_shared = c(rank, "Rank")  
+  
+  comparison_shared = rbind(density_shared, rf_shared, rank_shared)
+  comparison_shared = as.data.frame(comparison_shared)
+  names(comparison_shared) = c("wind_speed", "swr", "Kw", "Calibration method")
+  
+  
+  #### Visualisation ####
+  rf_Simstrat = as.numeric(rf_Simstrat[-c(5)])
+  rf_GOTM = as.numeric(rf_GOTM[-c(5)])
+  rf_FLake = as.numeric(rf_Simstrat[-c(5)])
+  rf_shared = as.numeric(rf_shared[-c(4)])
+  
+  rank_Simstrat = as.numeric(rank_Simstrat[-c(5)])
+  rank_GOTM = as.numeric(rank_GOTM[-c(5)])
+  rank_FLake = as.numeric(rank_Simstrat[-c(5)])
+  rank_shared = as.numeric(rank_shared[-c(4)])
+  
+  overview <- data.frame(
+    
+    value =   as.numeric(c(density_Simstrat[-c(5)], density_GOTM[-c(5)], density_FLake[-c(5)], density_shared[-c(4)],
+                rf_Simstrat, rf_GOTM, rf_FLake, rf_shared,
+                rank_Simstrat, rank_GOTM, rank_FLake, rank_shared)),
+  
+    parameter = c("wind_speed", "swr", "Kw", "a_seiche",
+                  "wind_speed", "swr", "Kw", "turb_param.k_min",
+                  "wind_speed", "swr", "Kw", "c_relax_C",
+                  "wind_speed", "swr", "Kw",
+                  "wind_speed", "swr", "Kw", "a_seiche",
+                  "wind_speed", "swr", "Kw", "turb_param.k_min",
+                  "wind_speed", "swr", "Kw", "c_relax_C",
+                  "wind_speed", "swr", "Kw",
+                  "wind_speed", "swr", "Kw", "a_seiche",
+                  "wind_speed", "swr", "Kw", "turb_param.k_min",
+                  "wind_speed", "swr", "Kw", "c_relax_C",
+                  "wind_speed", "swr", "Kw"),
+  
+    model = c(rep("Simstrat", 4), rep("GOTM", 4), rep("FLake", 4), rep("Shared", 3),
+              rep("Simstrat", 4), rep("GOTM", 4), rep("FLake", 4), rep("Shared", 3),
+              rep("Simstrat", 4), rep("GOTM", 4), rep("FLake", 4), rep("Shared", 3)),
+    calibration_method = c(rep("Optimal density", 15), rep("Random Forest", 15), rep("Rank", 15)),
+    stringsAsFactors = FALSE
+  )
+  
+  
+ 
+  ## parameter values per model and calibration method
+  
+    ## Shared parameters
+    ggplot(overview[overview$parameter %in% c("Kw", "swr", "wind_speed"),], aes(x = model, y = value, fill = calibration_method)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      facet_wrap(~ parameter, scales = "free_y") +  # One plot per parameter
+      labs(title = "Parameter Values by Model and Calibration Method",
+           x = "Model",
+           y = "Value") +
+      theme_minimal()
+  
+    ## Unique parameters
+    ggplot(overview[overview$parameter %in% c("a_seiche", "turb_param.k_min", "c_relax_C"),], aes(x = model, y = value, fill = calibration_method)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      facet_wrap(~ parameter, scales = "free_y") +  # One plot per parameter
+      labs(title = "Parameter Values by Model and Calibration Method",
+           x = "Model",
+           y = "Value") +
+      theme_minimal()
+    
+    
+  ## Distribution of parameter values
+    
+    ## Shared
+    ggplot(overview[overview$parameter %in% c("Kw", "swr", "wind_speed"),], aes(x = parameter, y = value)) +
+      geom_boxplot() + geom_jitter() +
+      labs(title = "Distribution of Parameter Values Across Calibration Methods",
+           x = "Parameter",
+           y = "Value") +
+      theme_minimal()
+  
+    ## Unique
+    ggplot(overview[overview$parameter %in% c("a_seiche", "turb_param.k_min", "c_relax_C"),], aes(x = parameter, y = value)) +
+      geom_boxplot() + geom_jitter() +
+    labs(title = "Distribution of Parameter Values Across Calibration Methods",
+         x = "Parameter",
+         y = "Value") +
+      theme_minimal()
+    
+    
 ```
-
-TODO background information on Kw parameter and other parameters
-
-In the following model run we choose to apply each set of best parameters once and compare those results.
-
-## Calibrated Model Runs
-
-Following, the ensemble is run with the calibrated parameters. 
-
-TODO: Prepare configs for all runs and 
-
-```{r bestparamrun}
-Density_config = "LakeEnsemblR_EERES_cali_Density.yaml"
-RF_config = "LakeEnsemblR_EERES_cali_RF.yaml"
-CMetric_config = "LakeEnsemblR_EERES_cali_CMetric.yaml"
-
-model = c("FLake","GOTM","Simstrat")
-output_dir = "output"
-
-export_config(config_file = Density_config, model = model)
-run_ensemble(config_file = Density_config, model = model, parallel=T)
-dir.create("output_density")
-file.rename(output_dir, "output_density")
-
-
-export_config(config_file = RF_config, model = model)
-run_ensemble(config_file = RF_config, model = model, parallel=T)
-dir.create("output_RF")
-file.rename(output_dir, "output_RF")
-
-export_config(config_file = CMetric_config, model = model)
-run_ensemble(config_file = CMetric_config, model = model, parallel=T)
-dir.create("output_CMetric")
-file.rename(output_dir, "output_CMetric")
-```
-
-# Analysis
-
-## model results plotting
-
-```{r model results}
-## Set up
-ncdf <- "output_FLake_GOTM_Simstrat/ensemble_output.nc"
-model = c("FLake", "GOTM", "Simstrat")
-
-#### Results ####
-# Take a look at the model fits to the observed data
-error_metrics = calc_fit(ncdf = ncdf,
-         model = model,
-         var = "temp")
-
-
-
-##### Model fits #####
-
-##### Heatmap #####
-p1 <- plot_heatmap(ncdf)
-
-# Change the theme and increase text size for saving
-p1 <- p1 +
-  theme_classic(base_size = 24) + 
-  scale_colour_gradientn(limits = c(0, 21),
-                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
-
-p1
-
-##### Built-in: Models vs. Oberservations, Residuals, Temperature range boxplots (per depth) #####
-
-# Plot ensemble mean at 0m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.1m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.1, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.15m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.15, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.2m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.2, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.25m
-plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.25, residuals = TRUE, boxwhisker = TRUE)
-
-# Plot ensemble mean at 0.3m
-# plot_ensemble(ncdf = ncdf, model = model, var = "temp", depth = 0.3, residuals = TRUE, boxwhisker = TRUE)
-
-
-
-##### ggplot2: Water temperature predictions of models vs. observed temperatures (at depths in m: 0, 0.05, 0.1, 0.15, 0.2, 0.25) #####
-
-# Load post-processed output data into your workspace
-analyse_df <- analyse_ncdf(ncdf = ncdf, spin_up = NULL, drho = 0.1, model = model)
-
-
-# Example plot the summer stratification period
-strat_df <- analyse_df$strat
-out_df <- analyse_df$out_df
-obs <- analyse_df$obs_temp
-
-obs$model = "Observed"
-# obs$depths = obs$depths - 0.05
-out_df = rbind(out_df, obs)
-
-
-# Convert date column to POSIXct for proper time handling
-out_df <- out_df %>%
-  mutate(date = as.POSIXct(date, format = "%Y-%m-%d %H:%M:%S"),
-         depth_label = paste0(depths, " m"))  # Create depth label
-
-# Create the plot with labeled facets
-ggplot(out_df, aes(x = date, y = temp, color = model)) +
-  geom_line(alpha=0.5) +
-  facet_wrap(~depth_label, scales = "free_y") +  # Label depth with "m"
-  labs(title = "Water Temperature Predictions by Model",
-       x = "Date", y = "Temperature (°C)", color = "Model") +
-  theme_minimal() +
-  theme(legend.position = "bottom",
-        strip.text = element_text(size = 12))  # Make facet labels clearer
-
-```
-
-TODO: random error = homoscedasticity
-
-Systematic discrepancy: over or underprediction of temperature at certain depths/certain 
-
-# Appendix
 
 ## Single model runs
 
@@ -901,96 +1738,6 @@ setwd("../")
 # END
 ```
 
-## Simplified Calibration
-
-```{r bestsets}
-# load results of LHC in a data.frame
-model = c("FLake","GOTM","Simstrat")
-cali_res = list(res_file_FLake,res_file_GOTM,res_file_Simstrat)
-res_LHC <- load_LHC_results(config_file = config_file, model = model, res_files = unlist(cali_res))
-
-# Use res_LHC to investigate the results of the calibration
-
-# get the best parameter set for each model using rmse
-best_p_rmse <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$rmse), ]), model)
-best_p_nse <- setNames(lapply(model, function(m)res_LHC[[m]][which.max(res_LHC[[m]]$nse), ]), model)
-best_p_mae <- setNames(lapply(model, function(m)res_LHC[[m]][which.min(res_LHC[[m]]$mae), ]), model)
-print("Set of parameters with lowest RMSE:")
-print(best_p_rmse)
-print("Set of parameters with highest NSE:")
-print(best_p_rmse)
-print("Set of parameters with lowest MAE:")
-print(best_p_rmse)
-```
-
-We see that the best fitting parameter is independent of the quality metric used (RMSE, NSE or MAE). Subsequently, we will use this set of parameters in the following model. Since the parameters for wind speed (wind_speed) and shortwave radiation scaling (swr) are shared across all the models, the mean value of these from the best sets of parameters is calculated in the following code. The model specific parameters are printed below.
-
-```{r bestparams}
-# Initialize a list to store the mean values for each model
-mean_values <- list()
-
-# Initialize vectors to store wind_speed and swr values across all models
-all_wind_speed <- c()
-all_swr <- c()
-all_kW <- c()
-
-# Function to calculate mean values for a given model
-calculate_means <- function(model_name) {
-  # Extract dataframes for the model from each list
-  df_rmse <- best_p_rmse[[model_name]]
-  df_nse <- best_p_nse[[model_name]]
-  df_mae <- best_p_mae[[model_name]]
-
-  # Combine the dataframes
-  combined_df <- rbind(df_rmse, df_nse, df_mae)
-
-  # Calculate mean for the specified parameters
-  mean_wind_speed <- mean(combined_df$wind_speed, na.rm = TRUE)
-  mean_swr <- mean(combined_df$swr, na.rm = TRUE)
-  mean_Kw <- mean(combined_df$Kw, na.rm = TRUE)
-
-  # Check if the parameter exists in the combined dataframe before calculating mean
-  mean_a_seiche <- ifelse("a_seiche" %in% colnames(combined_df),
-                           mean(combined_df$a_seiche, na.rm = TRUE), NA)
-  mean_turb_param_k_min <- ifelse("turb_param.k_min" %in% colnames(combined_df),
-                                   mean(combined_df$turb_param.k_min, na.rm = TRUE), NA)
-  mean_c_relax_C <- ifelse("c_relax_C" %in% colnames(combined_df),
-                           mean(combined_df$c_relax_C, na.rm = TRUE), NA)
-
-  # Append wind_speed and swr values to the global vectors
-  all_wind_speed <<- c(all_wind_speed, combined_df$wind_speed)
-  all_swr <<- c(all_swr, combined_df$swr)
-  all_Kw <<- c(all_kW, combined_df$Kw)
-
-  # Return the means as a named vector
-  return(c(mean_wind_speed, mean_swr, mean_Kw, mean_a_seiche, mean_turb_param_k_min, mean_c_relax_C))
-}
-
-# Calculate means for each model
-mean_values$FLake <- calculate_means("FLake")
-mean_values$GOTM <- calculate_means("GOTM")
-mean_values$Simstrat <- calculate_means("Simstrat")
-
-# Convert the list to a dataframe for better visualization
-mean_values_df <- do.call(rbind, mean_values)
-colnames(mean_values_df) <- c("mean_wind_speed", "mean_swr", "mean_Kw", "mean_a_seiche", "mean_turb_param.k_min", "mean_c_relax_C")
-
-# Calculate overall mean for wind_speed and swr across all models
-overall_mean_wind_speed <- mean(all_wind_speed, na.rm = TRUE)
-overall_mean_swr <- mean(all_swr, na.rm = TRUE)
-overall_mean_Kw <- mean(all_Kw, na.rm=TRUE)
-
-# Print the mean values for each model
-cat("Parameter combination with best fit: \n")
-print(mean_values_df)
-
-# Print the overall mean values
-cat("Overall mean wind_speed across all models:", overall_mean_wind_speed, "\n")
-cat("Overall mean swr across all models:", overall_mean_swr, "\n")
-cat("Overall mean Kw across all models:", overall_mean_Kw)
-```
-
-
 ## Model runs of enlarged basin
 
 TODO: Think about setting fix_wtlvl to false since this may be important for stratification dynamics. TODO: Set the initial water temperature on a scientifically based information (Use the known temperature and add lower temperatures at lower depths)
@@ -1046,103 +1793,5 @@ run_ensemble(config_file = config_file, model = model, parallel = T, return_list
 file.rename(paste0(getwd(),"output"),
 
             paste0(getwd(),"output_10area10depth"))
-
-```
-
-## Nullmodel of Meteodata
-The following code creates a nullmodel of the meteorological data.
-
-```{r Nullmodeldata, results=hide, include=FALSE}
-generate_random_meteo_data <- function(template, n) {
-  sample_data <- data.frame(datetime = template$datetime)  # Keep datetime unchanged
-  
-  # Generate new data for each numeric column
-  for (col in names(template)[-1]) {  # Exclude the datetime column
-    if (is.numeric(template[[col]])) {
-      # Get min and max values for the column
-      min_val <- min(template[[col]], na.rm = TRUE)
-      max_val <- max(template[[col]], na.rm = TRUE)
-      
-      # Calculate mean and standard deviation of the original column
-      mean_val <- mean(template[[col]], na.rm = TRUE)
-      sd_val <- sd(template[[col]], na.rm = TRUE)
-      
-      # Generate new values based on normal distribution
-      new_values <- rnorm(n, mean = mean_val, sd = sd_val)
-      
-      # Ensure values are within the specified bounds
-      new_values <- pmax(new_values, min_val)  # Set a lower bound
-      new_values <- pmin(new_values, max_val)  # Set an upper bound
-      
-      sample_data[[col]] <- new_values
-    }
-  }
-  
-  return(sample_data)
-}
-
-# Generate a new sample dataframe based on the template
-set.seed(123)  # For reproducibility
-n_samples <- nrow(meteo_filled)  # Number of samples to generate
-new_random_meteo_df <- generate_random_meteo_data(meteo_filled, n_samples)
-
-# Function to generate new random data for Water_Temperature_celsius
-generate_random_EERES_data <- function(template, n) {
-  sample_data <- data.frame(datetime = template$datetime, Depth_meter = template$Depth_meter)  # Keep datetime and Depth unchanged
-  
-  # Get min and max values for Water_Temperature_celsius
-  min_temp <- min(template$Water_Temperature_celsius, na.rm = TRUE)
-  max_temp <- max(template$Water_Temperature_celsius, na.rm = TRUE)
-  
-  # Generate new temperature values
-  mean_temp <- mean(template$Water_Temperature_celsius, na.rm = TRUE)
-  sd_temp <- sd(template$Water_Temperature_celsius, na.rm = TRUE)
-  
-  # Generate new temperature values and ensure they are within the specified bounds
-  new_temp_values <- rnorm(n, mean = mean_temp, sd = sd_temp)
-  new_temp_values <- pmax(new_temp_values, min_temp)  # Ensure values are not below min_temp
-  new_temp_values <- pmin(new_temp_values, max_temp)  # Ensure values are not above max_temp
-  
-  sample_data$Water_Temperature_celsius <- new_temp_values
-  
-  return(sample_data)
-}
-
-
-# Generate a new sample dataframe based on the template
-set.seed(123)  # For reproducibility
-n_samples <- nrow(EERES_T_long)  # Number of samples to generate
-new_random_EERES_df <- generate_random_EERES_data(EERES_T_long, n_samples)
-
-write.table(new_random_meteo_df, file = "LakeEnsemblR_meteo.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
-
-write.table(new_random_EERES_df, file = "LakeEnsemblR_wtemp_profile.csv", sep = ",", dec = ".", row.names = FALSE, col.names = TRUE, quote = FALSE)
-```
-
-```{r Nullmodel, results=hide, include=FALSE}
-getwd()
-# setwd("../")
-# Set config file & models
-config_file <- "LakeEnsemblR.yaml"
-# model <- c("FLake", "GLM", "GOTM", "Simstrat",  "MyLake")
-model <- c("FLake","GOTM","Simstrat")
-
-# Example run
-# 1. Export settings - creates directories with all model setups and exports settings from the LER configuration file
-export_config(config_file = config_file, model = model)
-
-# 2. Run ensemble lake models
-run_ensemble(config_file = config_file, model = model, parallel = T, return_list = T, ncores = 4)
-
-ncdf <- 'output/ensemble_output.nc'
-vars <- gotmtools::list_vars(ncdf)
-vars # Print variables
-
-p1 <- plot_heatmap(ncdf)
-p1 <- p1 +
-  theme_classic(base_size = 24) + 
-  scale_colour_gradientn(limits = c(0, 21),
-                         colours = rev(RColorBrewer::brewer.pal(11, "Spectral")))
-p1
 
 ```
