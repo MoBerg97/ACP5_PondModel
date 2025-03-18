@@ -463,8 +463,8 @@ cali_ensemble2 = function (config_file, num = NULL, param_file = NULL, cmethod =
   return(model_out)
 }
 
-cali_res_FLake_test <- cali_ensemble2(config_file = config_file, num = 1, cmethod = "LHC",
-                                 parallel = T, model = "FLake", ncores = 1)
+# cali_res_FLake_test <- cali_ensemble2(config_file = config_file, num = 1, cmethod = "LHC",
+#                                  parallel = T, model = "FLake", ncores = 1)
 
 
 # export_location ####
@@ -651,7 +651,7 @@ export_location2 = function (config_file, model = c("GOTM", "GLM", "Simstrat", "
   message("export_location complete!")
 }
 
-export_location2(config_file=config_file, model = c("FLake","GLM","GOTM","Simstrat","MyLake"))
+# export_location2(config_file=config_file, model = c("FLake","GLM","GOTM","Simstrat","MyLake"))
 
 
 # plot_LHC ####
@@ -748,8 +748,8 @@ plot_LHC2 = function (config_file, model, res_files, qual_met = "rmse", best_qua
   return(ret_l)
 }
 
-plot_LHC2(config_file = config_file, model = "GOTM", res_files = cali_res_GOTM$GOTM,
-         qual_met = "nse", best = "high")
+# plot_LHC2(config_file = config_file, model = "GOTM", res_files = cali_res_GOTM$GOTM,
+#          qual_met = "nse", best = "high")
  
 # export_config ####
 
@@ -808,3 +808,262 @@ on.exit({
                             folder = folder)
   }
 }
+
+# plot_heatmap ####
+
+plot_heatmap2 = function (ncdf = NULL, var = "temp", dim = "model", dim_index = 1, 
+          var_list = NULL, model = NULL, tile_width = NULL, tile_height = NULL) 
+{
+  model <- check_models(model)
+  if (!is.null(ncdf)) {
+    if (!file.exists(ncdf)) {
+      stop("File '", ncdf, "' does not exist. Check you have the correct filepath.")
+    }
+    vars <- gotmtools::list_vars(ncdf)
+    if (!(var %in% vars)) {
+      stop("Variable '", var, "' is not present in the netCDF file '", 
+           ncdf, "'")
+    }
+    var_list <- load_var(ncdf, var = var, return = "list", 
+                         dim = dim, dim_index = dim_index)
+  }
+  else {
+    var_list <- var_list
+  }
+  if (!is.null(model)) {
+    var_list <- var_list[c(model, "Obs")]
+  }
+  mod_names <- names(var_list)
+  data <- var_list %>% reshape2::melt(id.vars = "datetime") %>% 
+    dplyr::group_by(datetime)
+  colnames(data) <- c("datetime", "Depth", "value", "Model")
+  data$depth <- -as.numeric(gsub("wtr_", "", data$Depth))
+  data <- as.data.frame(data)
+  data$Model <- factor(data$Model)
+  data$Model <- factor(data$Model, levels = mod_names)
+  if (is.null(tile_width)) {
+    tile_width <- as.numeric(difftime(data$datetime[2], data$datetime[1], 
+                                      units = "secs"))
+  }
+  if (is.null(tile_height)) {
+    the_depths <- unique(data$depth)
+    tile_height <- abs(min(diff(the_depths)))
+  }
+  spec <- RColorBrewer::brewer.pal(11, "Spectral")
+  data <- data[!is.na(data$value), ]
+  if (nrow(data) == 0) {
+    stop("Modelled  and observed data is all NAs.\n         Please inspect the model output and re-run 'run_ensemble()' if necessary.")
+  }
+  p1 <- ggplot(data) + geom_tile(aes(datetime, depth, fill = value), 
+                                 width = tile_width, height = tile_height) + scale_fill_gradientn(colours = rev(spec)) + 
+    facet_wrap(~Model, ncol = 2)
+  return(p1)
+}
+
+# plot_heatmap2(ncdf)
+
+
+# load_var ####
+
+load_var2 = function (ncdf, var, return = "list", dim = "model", dim_index = 1, 
+                      print = TRUE) 
+{
+  match.arg(return, c("list", "array"))
+  match.arg(dim, c("model", "member"))
+  if (!file.exists(ncdf)) {
+    stop(ncdf, " does not exist. Check the filepath is correct.")
+  }
+  if (!var %in% lake_var_dic$short_name) {
+    stop(paste0("Variabel '", var, "' unknown. Allowed names for var: ", 
+                paste0(lake_var_dic$short_name, collapse = ", ")))
+  }
+  tryCatch({
+    fid <- ncdf4::nc_open(ncdf)
+    tim <- ncdf4::ncvar_get(fid, "time")
+    tunits <- ncdf4::ncatt_get(fid, "time")
+    tustr <- strsplit(tunits$units, " ")
+    tdstr <- strsplit(unlist(tustr)[3], "-")
+    tmonth <- as.integer(unlist(tdstr)[2])
+    tday <- as.integer(unlist(tdstr)[3])
+    tyear <- as.integer(unlist(tdstr)[1])
+    tdstr <- strsplit(unlist(tustr)[4], ":")
+    thour <- as.integer(unlist(tdstr)[1])
+    tmin <- as.integer(unlist(tdstr)[2])
+    origin <- as.POSIXct(paste0(tyear, "-", tmonth, "-", 
+                                tday, " ", thour, ":", tmin), format = "%Y-%m-%d %H:%M", 
+                         tz = "UTC")
+    time <- as.POSIXct(tim, origin = origin, tz = "UTC")
+    mod_names <- ncdf4::ncatt_get(fid, "model", "Model")$value
+    mod_names <- strsplit(mod_names, ", ")[[1]]
+    mod_names <- substring(mod_names, 5)
+    mem <- ncdf4::ncvar_get(fid, "member")
+    var1 <- ncdf4::ncvar_get(fid, var)
+    tunits <- ncdf4::ncatt_get(fid, var)
+    miss_val <- tunits$missing_value
+    var1[var1 >= miss_val] <- NA
+    var_dim <- strsplit(tunits$coordinates, " ")[[1]]
+    if (length(dim(var1)) > 2) {
+      z <- ncvar_get(fid, "z")
+    }
+  }, warning = function(w) {
+    return_val <- "Warning"
+  }, error = function(e) {
+    return_val <- "Error"
+    warning("Error creating netCDF file!")
+  }, finally = {
+    ncdf4::nc_close(fid)
+  })
+  mat <- matrix(data = c(var, tunits$units), 
+                dimnames = list(c("short_name", "units"), 
+                                c()))
+  if (print == TRUE) {
+    message("Extracted ", var, " from ", ncdf)
+    print(mat)
+  }
+  if (length(dim(var1)) == 4) {
+    n_vals <- dim(var1)[2] * (dim(var1)[3]) * (dim(var1)[4])
+    for (m in seq_len(dim(var1)[1])) {
+      nas <- sum(is.na(var1[m, , , ]))
+      if (nas == n_vals) {
+        break
+      }
+    }
+    if (m != dim(var1)[1]) {
+      var1 <- var1[(seq_len(m - 1)), , , ]
+    }
+  }
+  else if (length(dim(var1)) == 3) {
+    n_vals <- dim(var1)[2] * (dim(var1)[3])
+    for (m in seq_len(dim(var1)[1])) {
+      nas <- sum(is.na(var1[m, , ]))
+      if (nas == n_vals) {
+        break
+      }
+    }
+    if (m != dim(var1)[1]) {
+      var1 <- var1[(seq_len(m - 1)), , ]
+    }
+  }
+  if (return == "array") {
+    if (length(dim(var1)) == 4) {
+      dimnames(var1) <- list(paste0("member_", seq_len(dim(var1)[1])), 
+                             mod_names, as.character(time), z)
+    }
+    if (length(dim(var1)) == 3 & var == "temp") {
+      dimnames(var1) <- list(mod_names, as.character(time), 
+                             z)
+    }
+    if (length(dim(var1)) == 3 & var == "ice_height") {
+      dimnames(var1) <- list(paste0("member_", seq_len(dim(var1)[1])), 
+                             mod_names, as.character(time))
+    }
+    if (length(dim(var1)) == 2) {
+      dimnames(var1) <- list(mod_names, as.character(time))
+    }
+    return(var1)
+  }
+  if (return == "list") {
+    if ("z" %in% var_dim) {
+      if (length(dim(var1)) == 4) {
+        if (dim == "model") {
+          if (dim_index > dim(var1)[1]) {
+            stop("Dimension index ", dim_index, " out of bounds!\nAvailable dimensions: ", 
+                 paste(seq_len(dim(var1)[1]), collapse = ","))
+          }
+          var_list <- lapply(seq(dim(var1)[2]), function(x) var1[dim_index, 
+                                                                 x, , ])
+          names(var_list) <- mod_names
+        }
+        else if (dim == "member") {
+          if (dim_index > dim(var1)[2]) {
+            stop("Dimension index ", dim_index, " out of bounds!\nAvailable dimensions: ", 
+                 paste(seq_len(dim(var1)[2]), collapse = ","))
+          }
+          var_list <- lapply(seq(dim(var1)[1]), function(x) var1[x, 
+                                                                 dim_index, , ])
+          n_vals <- dim(var_list[[1]])[1] * (dim(var_list[[1]])[2])
+          for (m in seq_len(length(var_list))) {
+            nas <- sum(is.na(var_list[[m]]))
+            if (nas == n_vals) {
+              break
+            }
+          }
+          if (m != length(var_list)) {
+            var_list <- var_list[(seq_len(m - 1))]
+          }
+          names(var_list) <- paste0(mod_names[dim_index], 
+                                    "_member_", seq_len(length(var_list)))
+        }
+        var_list <- lapply(var_list, function(x) {
+          x <- as.data.frame(x)
+          x <- cbind(time, x)
+          colnames(x) <- c("datetime", paste0("wtr_", 
+                                              abs(z)))
+          return(x)
+        })
+      }
+      else if (length(dim(var1)) == 3) {
+        var_list <- lapply(seq(dim(var1)[1]), function(x) var1[x, 
+                                                               , ])
+        names(var_list) <- mod_names
+        var_list <- lapply(var_list, function(x) {
+          x <- as.data.frame(x)
+          x <- cbind(time, x)
+          colnames(x) <- c("datetime", paste0("wtr_", 
+                                              abs(z)))
+          return(x)
+        })
+      }
+    }
+    else {
+      if (length(dim(var1)) == 2) {
+        var_list <- lapply(seq(dim(var1)[1]), function(x) var1[x, 
+        ])
+        names(var_list) <- mod_names
+        var_list <- lapply(var_list, function(x) {
+          x <- as.data.frame(x)
+          x <- cbind(time, x)
+          colnames(x)[2] <- var
+          return(x)
+        })
+      }
+      else if (length(dim(var1)) == 3) {
+        if (dim == "model") {
+          if (dim_index > dim(var1)[2]) {
+            stop("Dimension index ", dim_index, " out of bounds!\nAvailable dimensions: ", 
+                 paste(seq_len(dim(var1)[2]), collapse = ","))
+          }
+          var_list <- lapply(seq(dim(var1)[2]), function(x) var1[dim_index, 
+                                                                 x, ])
+          names(var_list) <- mod_names
+        }
+        else {
+          var_list <- lapply(seq(dim(var1)[1]), function(x) var1[x, 
+                                                                 dim_index, ])
+          n_vals <- length(var_list[[1]])
+          for (m in seq_len(length(var_list))) {
+            nas <- sum(is.na(var_list[[m]]))
+            if (nas == n_vals) {
+              break
+            }
+          }
+          if (m != length(var_list)) {
+            var_list <- var_list[(seq_len(m - 1))]
+          }
+          names(var_list) <- paste0(mod_names[dim_index], 
+                                    "_member_", seq_len(length(var_list)))
+        }
+        var_list <- lapply(var_list, function(x) {
+          x <- as.data.frame(x)
+          x <- cbind(time, x)
+          colnames(x)[2] <- var
+          return(x)
+        })
+      }
+    }
+  }
+  return(var_list)
+}
+
+load_var2(ncdf = "output/ensemble_output.nc", var = "temp", return = "list", 
+          dim = "model", dim_index = 1)

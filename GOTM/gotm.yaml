@@ -21,9 +21,9 @@ temperature:                            # temperature profile used for initializ
    column: 1 # index of column to read from [default=1]
    analytical:
       method: 1                         # type of analytical initial temperature profile [1=constant, 2=two layers, 3=from salinity and buoyancy frequency; default=1]
-      z_t1: 30.0                        # upper layer thickness [m; min=0.0; default=0.0]
+      z_t1: 0.05                        # upper layer thickness [m; min=0.0; default=0.0]
       t_1: 20.0                         # upper layer temperature [Celsius; min=0.0; max=40.0; default=0.0]
-      z_t2: 40.0                        # lower layer thickness [m; min=0.0; default=0.0]
+      z_t2: 0.05                        # lower layer thickness [m; min=0.0; default=0.0]
       t_2: 15.0                         # lower layer temperature [Celsius; min=0.0; max=40.0; default=0.0]
       obs_NN: 0.0                       # constant buoyancy frequency [s^-2; min=0.0; default=0.0]
    relax:                               # relax model temperature to observed/prescribed value
@@ -38,9 +38,9 @@ salinity:                               # salinity profile used for initializati
    column: 1                            # index of column to read from [default=1]
    analytical:
       method: 1                         # type of analytical initial salinity profile [1=constant, 2=two layers, 3=from temperature and buoyancy frequency; default=1]
-      z_s1: 30.0                        # upper layer thickness [m; min=0.0; default=0.0]
+      z_s1: 0.05                        # upper layer thickness [m; min=0.0; default=0.0]
       s_1: 20.0                         # upper layer salinity [psu; min=0.0; max=40.0; default=0.0]
-      z_s2: 40.0                        # lower layer thickness [m; min=0.0; default=0.0]
+      z_s2: 0.05                        # lower layer thickness [m; min=0.0; default=0.0]
       s_2: 15.0                         # lower layer salinity [psu; min=0.0; max=40.0; default=0.0]
       obs_NN: 0.0                       # constant buoyancy frequency [s^-2; min=0.0; default=0.0]
    relax:                               # relax model salinity to observed/prescribed value
@@ -344,8 +344,8 @@ restart:
 output:
    output/output:                       # path of output file, excluding extension
       format: netcdf # format [text, netcdf; default=netcdf]
-      time_unit: hour # time unit [second, hour, day, month, year, dt=model time step; default=day]
-      time_step: 1 # number of time units between output [min=1; default=1]
+      time_unit: second # time unit [second, hour, day, month, year, dt=model time step; default=day]
+      time_step: 600 # number of time units between output [min=1; default=1]
       time_method: point # treatment of time dimension [point=instantaneous, mean, integrated; default=point]
       sync_interval: 0                  # number of output steps between sychronization to disk (<= 0: sync on close only) [default=1]
       variables:

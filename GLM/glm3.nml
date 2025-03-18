@@ -47,7 +47,7 @@
 &output
    out_dir = 'output'
    out_fn = 'output'
-   nsave = 6
+   nsave = 1
    csv_lake_fname = 'lake'
 /
 &init_profiles
