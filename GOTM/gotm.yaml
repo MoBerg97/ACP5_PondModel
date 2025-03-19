@@ -167,7 +167,7 @@ turbulence:
       galp: 0.27                        # coefficient for length scale limitation [dimensionless; min=0.0; default=0.27]
       const_num: 5.00000000E-04         # constant eddy diffusivity [m^2/s; min=0.0; default=5.00000000E-04]
       const_nuh: 5.00000000E-04         # constant heat diffusivity [m^2/s; min=0.0; default=5.00000000E-04]
-      k_min: 3.6e-06 # minimum turbulent kinetic energy [m^2/s^2; min=0.0; default=1.00000000E-10]
+      k_min: 5.1853e-10 # minimum turbulent kinetic energy [m^2/s^2; min=0.0; default=1.00000000E-10]
       eps_min: 1.00000000E-12           # minimum dissipation rate [m^2/s^3; min=0.0; default=1.00000000E-12]
       kb_min: 1.00000000E-10            # minimum buoyancy variance [m^2/s^4; min=0.0; default=1.00000000E-10]
       epsb_min: 1.00000000E-14          # minimum buoyancy variance destruction rate [m^2/s^5; min=0.0; default=1.00000000E-14]
@@ -344,8 +344,8 @@ restart:
 output:
    output/output:                       # path of output file, excluding extension
       format: netcdf # format [text, netcdf; default=netcdf]
-      time_unit: second # time unit [second, hour, day, month, year, dt=model time step; default=day]
-      time_step: 600 # number of time units between output [min=1; default=1]
+      time_unit: hour # time unit [second, hour, day, month, year, dt=model time step; default=day]
+      time_step: 1 # number of time units between output [min=1; default=1]
       time_method: point # treatment of time dimension [point=instantaneous, mean, integrated; default=point]
       sync_interval: 0                  # number of output steps between sychronization to disk (<= 0: sync on close only) [default=1]
       variables:
