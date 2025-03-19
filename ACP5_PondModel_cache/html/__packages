@@ -1,0 +1,13 @@
+readr
+lubridate
+dplyr
+tidyr
+readxl
+zoo
+data.table
+ggplot2
+rLakeAnalyzer
+gotmtools
+LakeEnsemblR
+patchwork
+randomForest
